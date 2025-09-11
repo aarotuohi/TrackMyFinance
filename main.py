@@ -24,7 +24,78 @@ CATEGORIES = [
 	"Other",
 ]
 
+def get_conn():
+	return sqlite3.connect(DB_PATH, check_same_thread=False)
 
+
+def init_db():
+	with get_conn() as conn:
+		conn.execute(
+			"""
+			CREATE TABLE IF NOT EXISTS transactions (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				t_date TEXT NOT NULL,             -- ISO date (YYYY-MM-DD)
+				description TEXT,
+				category TEXT NOT NULL,
+				amount REAL NOT NULL,             -- positive numbers
+				created_at TEXT DEFAULT (datetime('now'))
+			)
+			"""
+		)
+
+
+def insert_transaction(t_date: date, description: str, category: str, amount: float):
+	with get_conn() as conn:
+		conn.execute(
+			"INSERT INTO transactions (t_date, description, category, amount) VALUES (?, ?, ?, ?)",
+			(
+				t_date.isoformat() if isinstance(t_date, date) else str(t_date),
+				(description or "").strip(),
+				category.strip(),
+				float(amount),
+			),
+		)
+
+
+def delete_transaction(tx_id: int):
+	with get_conn() as conn:
+		conn.execute("DELETE FROM transactions WHERE id = ?", (int(tx_id),))
+
+
+def load_transactions(start: Optional[date] = None, end: Optional[date] = None, categories: Optional[List[str]] = None) -> pd.DataFrame:
+	query = "SELECT id, t_date, description, category, amount FROM transactions WHERE 1=1"
+	params: list = []
+	if start is not None:
+		query += " AND t_date >= ?"
+		params.append(start.isoformat())
+	if end is not None:
+		query += " AND t_date <= ?"
+		params.append(end.isoformat())
+	if categories:
+		placeholders = ",".join(["?"] * len(categories))
+		query += f" AND category IN ({placeholders})"
+		params.extend(categories)
+
+	with get_conn() as conn:
+		df = pd.read_sql_query(query, conn, params=params, parse_dates=["t_date"]) 
+
+	if not df.empty:
+		df = df.sort_values("t_date")
+		df["amount"] = df["amount"].astype(float)
+	return df
+
+
+
+def period_default() -> Tuple[date, date]:
+	today = date.today()
+	start = today - timedelta(days=30)
+	return start, today
+
+
+def ensure_category(cat: str, other_text: Optional[str]) -> str:
+	if cat == "Other":
+		return (other_text or "Other").strip() or "Other"
+	return cat
 def render_summary(df: pd.DataFrame, start: date, end: date):
 	if df.empty:
 		st.info("No transactions in the selected period.")
@@ -125,7 +196,7 @@ def daterange_list(start: date, end: date) -> List[date]:
 
 
 def main():
-	#init_db()
+	init_db()
 
 	st.title("💸 Track My Finance")
 	st.caption("Simple personal spending tracker")
@@ -134,28 +205,21 @@ def main():
 	if "page" not in st.session_state:
 		st.session_state.page = "home"
 
-	# Top navigation buttons
-	nav_col1, nav_col2 = st.columns([1, 1])
-	with nav_col1:
-		if st.session_state.page != "home":
-			if st.button("← Back to Home", use_container_width=False):
-				st.session_state.page = "home"
-				st.rerun()
-	with nav_col2:
-		if st.session_state.page != "multi":
-			if st.button("Open multi-day stats →", type="primary", use_container_width=False):
-				st.session_state.page = "multi"
-				st.rerun()
+	# Full screen state sidebar in filters (maybe located to somewhere else)
 
 	if st.session_state.page == "multi":
 		# Sidebar filters for multi-day view
 		st.sidebar.header("Filters")
 		category_filter = st.sidebar.multiselect("Categories", options=CATEGORIES, default=CATEGORIES)
+		# Back to Home in sidebar
+		if st.sidebar.button("← Back to Home", use_container_width=False):
+			st.session_state.page = "home"
+			st.rerun()
 		st.sidebar.markdown("---")
-		st.sidebar.caption("Made with Streamlit")
+		
 
 		st.subheader("Multi-day statistics")
-		# default_start, default_end = period_default()
+		default_start, default_end = period_default()
 		win = st.date_input(
 			"Choose a date window",
 			value=(default_start, default_end),
@@ -169,12 +233,12 @@ def main():
 
 		options = daterange_list(win_start, win_end)
 
-		# Manage selected dates via session state
+		# Manage selected dates 
 		key_sel = "multi_selected_dates"
 		if key_sel not in st.session_state:
 			st.session_state[key_sel] = options
 		else:
-			# Ensure values stay within options when window changes
+			
 			st.session_state[key_sel] = [d for d in st.session_state[key_sel] if d in options]
 
 		col_a, col_b = st.columns([3, 1])
@@ -193,9 +257,9 @@ def main():
 				st.session_state[key_sel] = []
 				st.rerun()
 
-		#df = load_transactions(win_start, win_end, categories=category_filter)
+		df = load_transactions(win_start, win_end, categories=category_filter)
 		if not df.empty:
-			# Keep only selected dates
+		
 			sel_set = set(selected_dates)
 			if sel_set:
 				df = df[df["t_date"].dt.date.isin(sel_set)]
@@ -203,9 +267,9 @@ def main():
 		render_summary_for_dates(df, st.session_state.get(key_sel, []))
 		return
 
-	# Sidebar filters
+	# Sidebar filters (Home)
 	st.sidebar.header("Filters")
-	#default_start, default_end = period_default()
+	default_start, default_end = period_default()
 	period = st.sidebar.date_input(
 		"Period",
 		value=(default_start, default_end),
@@ -214,12 +278,18 @@ def main():
 	if isinstance(period, tuple) and len(period) == 2:
 		start_date, end_date = period
 	else:
-		# Fallback for single-date selection
+	
 		start_date = end_date = period if isinstance(period, date) else date.today()
 
 	category_filter = st.sidebar.multiselect("Categories", options=CATEGORIES, default=CATEGORIES)
 
 	st.sidebar.markdown("---")
+	# Open multi-day stats button lives in the sidebar
+	if st.session_state.page != "multi":
+		if st.sidebar.button("Open multi-day stats", type="primary", use_container_width=False):
+			st.session_state.page = "multi"
+			st.rerun()
+	
 	
 
 	# Add transaction form
@@ -248,7 +318,7 @@ def main():
 				insert_transaction(t_date, description, final_cat, amount)
 				st.success("Added!")
 
-	# Load and render data for selected period
+	# Load and render 
 	df = load_transactions(start_date, end_date, categories=category_filter)
 	render_summary(df, start_date, end_date)
 	render_delete(df)
