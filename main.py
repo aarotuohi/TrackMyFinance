@@ -307,29 +307,35 @@ def main():
 
 	# Add transaction form
 	st.subheader("Add a spending")
+
+	# Category selection outside the form so it updates instantly
+	col_cat, col_other = st.columns([1, 1])
+	with col_cat:
+		st.selectbox("Category", options=CATEGORIES, index=0, key="add_cat")
+	with col_other:
+		if st.session_state.get("add_cat", CATEGORIES[0]) == "Other":
+			st.text_input("Insert other category", value="", key="add_other_cat")
+
 	with st.form("add_tx_form", clear_on_submit=True):
-		col1, col2, col3 = st.columns([1, 1, 1])
+		col1, col2 = st.columns([1, 1])
 		with col1:
 			t_date = st.date_input("Date", value=date.today())
 		with col2:
 			amount = st.number_input("Amount (€)", min_value=0.0, step=0.5, format="%.2f")
-		with col3:
-			cate = st.selectbox("Category", options=CATEGORIES, index=0)
-			
-			if cate == "Other":
-				other_cat = st.text_input("Insert other category", value="")
-			else:
-				other_cat = ""
 
 		description = st.text_input("Description (optional)")
 		submitted = st.form_submit_button("Add spending", type="primary")
 		if submitted:
+			cate = st.session_state.get("add_cat", CATEGORIES[0])
+			other_cat = st.session_state.get("add_other_cat", "") if cate == "Other" else ""
 			final_cat = ensure_category(cate, other_cat)
 			if amount <= 0:
 				st.error("Amount must be greater than 0.")
 			else:
 				insert_transaction(t_date, description, final_cat, amount)
 				st.success("Added!")
+				# Reseting the field after adding
+				st.session_state["add_other_cat"] = ""
 
 	# Load and render 
 	df = load_transactions(start_date, end_date, categories=category_filter)
