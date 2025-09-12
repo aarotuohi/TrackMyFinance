@@ -1,6 +1,8 @@
 import sqlite3
 from datetime import date, datetime, timedelta
 from typing import List, Optional, Tuple
+from pathlib import Path
+import calendar
 
 import pandas as pd
 import plotly.express as px
@@ -9,7 +11,11 @@ import streamlit as st
 # Config the app
 st.set_page_config(page_title="TrackMyFinance", page_icon="💸", layout="wide")
 
-DB_PATH = "finance.db"
+# Use path for the database (project root)
+PROJECT_ROOT = Path(__file__).resolve().parent
+DB_PATH = str(PROJECT_ROOT / "finance.db")
+
+# Categories (May change in the future)
 CATEGORIES = [
 	"Groceries",
 	"Transportation",
@@ -34,10 +40,10 @@ def init_db():
 			"""
 			CREATE TABLE IF NOT EXISTS transactions (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				t_date TEXT NOT NULL,             -- ISO date (YYYY-MM-DD)
+				t_date TEXT NOT NULL,             
 				description TEXT,
 				category TEXT NOT NULL,
-				amount REAL NOT NULL,             -- positive numbers
+				amount REAL NOT NULL,
 				created_at TEXT DEFAULT (datetime('now'))
 			)
 			"""
@@ -61,8 +67,9 @@ def delete_transaction(tx_id: int):
 	with get_conn() as conn:
 		conn.execute("DELETE FROM transactions WHERE id = ?", (int(tx_id),))
 
-
+# Load transactions with filters
 def load_transactions(start: Optional[date] = None, end: Optional[date] = None, categories: Optional[List[str]] = None) -> pd.DataFrame:
+	# Build query
 	query = "SELECT id, t_date, description, category, amount FROM transactions WHERE 1=1"
 	params: list = []
 	if start is not None:
@@ -76,26 +83,32 @@ def load_transactions(start: Optional[date] = None, end: Optional[date] = None, 
 		query += f" AND category IN ({placeholders})"
 		params.extend(categories)
 
+	# Load into DataFrame
 	with get_conn() as conn:
 		df = pd.read_sql_query(query, conn, params=params, parse_dates=["t_date"]) 
 
+	# Post-process
 	if not df.empty:
 		df = df.sort_values("t_date")
 		df["amount"] = df["amount"].astype(float)
 	return df
 
 
-
+# Default period, current month to date
 def period_default() -> Tuple[date, date]:
 	today = date.today()
-	start = today - timedelta(days=30)
-	return start, today
+	start = today.replace(day=1)
 
+	last_day = calendar.monthrange(today.year, today.month)[1]
+	end = today.replace(day=last_day)
+	return start, end
 
+# Helper
 def ensure_category(cat: str, other_text: Optional[str]) -> str:
 	if cat == "Other":
 		return (other_text or "Other").strip() or "Other"
 	return cat
+# Helper
 def render_summary(df: pd.DataFrame, start: date, end: date):
 	if df.empty:
 		st.info("No transactions in the selected period.")
