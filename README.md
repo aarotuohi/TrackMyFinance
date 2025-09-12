@@ -14,12 +14,11 @@ A simple personal finance tracking web app built with Streamlit and SQLite.
 3. Run the app.
 
 ### Windows PowerShell
-```
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+
+
 pip install -r requirements.txt
 streamlit run main.py
-```
+
 
 Then open the URL Streamlit prints (usually http://localhost:8501).
 
