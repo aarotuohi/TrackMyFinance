@@ -44,21 +44,27 @@ def init_db():
 				description TEXT,
 				category TEXT NOT NULL,
 				amount REAL NOT NULL,
+				recurring INTEGER NOT NULL DEFAULT 0,
 				created_at TEXT DEFAULT (datetime('now'))
 			)
 			"""
 		)
+		# Ensure the 'recurring' column exists for older DBs
+		cols = {row[1] for row in conn.execute("PRAGMA table_info(transactions)").fetchall()}
+		if "recurring" not in cols:
+			conn.execute("ALTER TABLE transactions ADD COLUMN recurring INTEGER NOT NULL DEFAULT 0")
 
 
-def insert_transaction(t_date: date, description: str, category: str, amount: float):
+def insert_transaction(t_date: date, description: str, category: str, amount: float, recurring: bool = False):
 	with get_conn() as conn:
 		conn.execute(
-			"INSERT INTO transactions (t_date, description, category, amount) VALUES (?, ?, ?, ?)",
+			"INSERT INTO transactions (t_date, description, category, amount, recurring) VALUES (?, ?, ?, ?, ?)",
 			(
 				t_date.isoformat() if isinstance(t_date, date) else str(t_date),
 				(description or "").strip(),
 				category.strip(),
 				float(amount),
+				1 if recurring else 0,
 			),
 		)
 
@@ -68,9 +74,9 @@ def delete_transaction(tx_id: int):
 		conn.execute("DELETE FROM transactions WHERE id = ?", (int(tx_id),))
 
 # Load transactions with filters
-def load_transactions(start: Optional[date] = None, end: Optional[date] = None, categories: Optional[List[str]] = None) -> pd.DataFrame:
+def load_transactions(start: Optional[date] = None, end: Optional[date] = None, categories: Optional[List[str]] = None, repeating_only: Optional[bool] = None) -> pd.DataFrame:
 	# Build query
-	query = "SELECT id, t_date, description, category, amount FROM transactions WHERE 1=1"
+	query = "SELECT id, t_date, description, category, amount, repeating FROM transactions WHERE 1=1"
 	params: list = []
 	if start is not None:
 		query += " AND t_date >= ?"
@@ -82,6 +88,10 @@ def load_transactions(start: Optional[date] = None, end: Optional[date] = None, 
 		placeholders = ",".join(["?"] * len(categories))
 		query += f" AND category IN ({placeholders})"
 		params.extend(categories)
+	if repeating_only is True:
+		query += " AND repeating = 1"
+	elif repeating_only is False:
+		query += " AND repeating = 0"
 
 	# Load into DataFrame
 	with get_conn() as conn:
@@ -91,6 +101,9 @@ def load_transactions(start: Optional[date] = None, end: Optional[date] = None, 
 	if not df.empty:
 		df = df.sort_values("t_date")
 		df["amount"] = df["amount"].astype(float)
+		# repeating bool
+		if "repeating" in df.columns:
+			df["repeating"] = df["repeating"].astype(int).astype(bool)
 	return df
 
 
@@ -140,8 +153,9 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
 
 	with st.expander("See table and export"):
 		show = df.copy()
-		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID"}, inplace=True)
-		st.dataframe(show[["ID", "Date", "Category", "Description", "Amount"]], use_container_width=True, hide_index=True)
+		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "recurring": "Recurring"}, inplace=True)
+		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Recurring"] if c in show.columns]
+		st.dataframe(show[cols], use_container_width=True, hide_index=True)
 		csv = show.to_csv(index=False).encode("utf-8")
 		st.download_button("Download CSV", data=csv, file_name="transactions.csv", mime="text/csv")
 
@@ -197,8 +211,9 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
 
 	with st.expander("See table and export"):
 		show = df.copy()
-		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID"}, inplace=True)
-		st.dataframe(show[["ID", "Date", "Category", "Description", "Amount"]], use_container_width=True, hide_index=True)
+		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "recurring": "Recurring"}, inplace=True)
+		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Recurring"] if c in show.columns]
+		st.dataframe(show[cols], use_container_width=True, hide_index=True)
 		csv = show.to_csv(index=False).encode("utf-8")
 		st.download_button("Download CSV", data=csv, file_name="transactions_selected_dates.csv", mime="text/csv")
 
@@ -224,6 +239,11 @@ def main():
 		# Sidebar filters for multi-day view
 		st.sidebar.header("Filters")
 		category_filter = st.sidebar.multiselect("Categories", options=CATEGORIES, default=CATEGORIES)
+		repeating_filter = st.sidebar.selectbox(
+			"Repeating filter",
+			options=["All", "Repeating", "Non-repeating"],
+			index=0,
+		)
 		# Back to Home in sidebar
 		if st.sidebar.button("← Back to Home", use_container_width=False):
 			st.session_state.page = "home"
@@ -270,7 +290,14 @@ def main():
 				st.session_state[key_sel] = []
 				st.rerun()
 
-		df = load_transactions(win_start, win_end, categories=category_filter)
+		# Map recurring filter to parameter
+		recurring_only_multi = None
+		if recurring_filter == "Repeating":
+			recurring_only_multi = True
+		elif recurring_filter == "Non-repeating":
+			recurring_only_multi = False
+
+		df = load_transactions(win_start, win_end, categories=category_filter, recurring_only=recurring_only_multi)
 		if not df.empty:
 		
 			sel_set = set(selected_dates)
@@ -295,6 +322,13 @@ def main():
 		start_date = end_date = period if isinstance(period, date) else date.today()
 
 	category_filter = st.sidebar.multiselect("Categories", options=CATEGORIES, default=CATEGORIES)
+
+	# Add repeating filter on Home as well
+	recurring_filter = st.sidebar.selectbox(
+		"Repeating filter",
+		options=["All", "Repeating", "Non-repeating"],
+		index=0,
+	)
 
 	st.sidebar.markdown("---")
 	# Open multi-day stats button lives in the sidebar
@@ -324,6 +358,7 @@ def main():
 			amount = st.number_input("Amount (€)", min_value=0.0, step=0.5, format="%.2f")
 
 		description = st.text_input("Description (optional)")
+		recurring_flag = st.checkbox("Monthly payment (recurring)")
 		submitted = st.form_submit_button("Add spending", type="primary")
 		if submitted:
 			cate = st.session_state.get("add_cat", CATEGORIES[0])
@@ -332,13 +367,19 @@ def main():
 			if amount <= 0:
 				st.error("Amount must be greater than 0.")
 			else:
-				insert_transaction(t_date, description, final_cat, amount)
+				insert_transaction(t_date, description, final_cat, amount, recurring=recurring_flag)
 				st.success("Added!")
 				# Reseting the field after adding
 				st.session_state["add_other_cat"] = ""
 
 	# Load and render 
-	df = load_transactions(start_date, end_date, categories=category_filter)
+	repeating_ = None
+	if repeating_filter == "Repeating":
+		repeating_ = True
+	elif repeating_filter == "Non-repeating":
+		repeating_ = False
+
+	df = load_transactions(start_date, end_date, categories=category_filter, recurring_only=repeating_)
 	render_summary(df, start_date, end_date)
 	render_delete(df)
 

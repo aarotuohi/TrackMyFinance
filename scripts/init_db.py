@@ -25,10 +25,15 @@ def init_db() -> None:
                 description TEXT,
                 category TEXT NOT NULL,
                 amount REAL NOT NULL,
+                repeating INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
             )
             """
         )
+        
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(transactions)").fetchall()}
+        if "repeating" not in cols:
+            conn.execute("ALTER TABLE transactions ADD COLUMN repeating INTEGER NOT NULL DEFAULT 0")
     print(f"Initialized database at: {DB_PATH}")
 
 
