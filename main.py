@@ -30,6 +30,14 @@ CATEGORIES = [
 	"Other",
 ]
 
+# --- Callbacks for synced widgets ---
+def _on_limit_slider_change():
+	st.session_state["limit_number"] = st.session_state.get("limit_slider", 0.0)
+
+
+def _on_limit_number_change():
+	st.session_state["limit_slider"] = st.session_state.get("limit_number", 0.0)
+
 def get_conn():
 	return sqlite3.connect(DB_PATH, check_same_thread=False)
 
@@ -144,18 +152,18 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
 		by_cat = df.groupby("category", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
 		fig_pie = px.pie(by_cat, names="category", values="amount", title="By category")
 		fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-		st.plotly_chart(fig_pie, use_container_width=True)
+		st.plotly_chart(fig_pie, width=True)
 
 	with right:
 		by_day = df.groupby("t_date", as_index=False)["amount"].sum()
 		fig_day = px.bar(by_day, x="t_date", y="amount", title="By day")
-		st.plotly_chart(fig_day, use_container_width=True)
+		st.plotly_chart(fig_day, width=True)
 
 	with st.expander("See table and export"):
 		show = df.copy()
 		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating"}, inplace=True)
 		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating"] if c in show.columns]
-		st.dataframe(show[cols], use_container_width=True, hide_index=True)
+		st.dataframe(show[cols], width=True, hide_index=True)
 		csv = show.to_csv(index=False).encode("utf-8")
 		st.download_button("Download CSV", data=csv, file_name="transactions.csv", mime="text/csv")
 
@@ -202,18 +210,18 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
 		by_cat = df.groupby("category", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
 		fig_pie = px.pie(by_cat, names="category", values="amount", title="By category")
 		fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-		st.plotly_chart(fig_pie, use_container_width=True)
+		st.plotly_chart(fig_pie, width=True)
 
 	with right:
 		by_day = df.groupby("t_date", as_index=False)["amount"].sum()
 		fig_day = px.bar(by_day, x="t_date", y="amount", title="By day")
-		st.plotly_chart(fig_day, use_container_width=True)
+		st.plotly_chart(fig_day, width=True)
 
 	with st.expander("See table and export"):
 		show = df.copy()
 		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating"}, inplace=True)
 		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating"] if c in show.columns]
-		st.dataframe(show[cols], use_container_width=True, hide_index=True)
+		st.dataframe(show[cols], width=True, hide_index=True)
 		csv = show.to_csv(index=False).encode("utf-8")
 		st.download_button("Download CSV", data=csv, file_name="transactions_selected_dates.csv", mime="text/csv")
 
@@ -245,7 +253,7 @@ def main():
 			index=0,
 		)
 		# Back to Home in sidebar
-		if st.sidebar.button("← Back to Home", use_container_width=False):
+		if st.sidebar.button("← Back to Home", width=False):
 			st.session_state.page = "home"
 			st.rerun()
 		st.sidebar.markdown("---")
@@ -283,10 +291,10 @@ def main():
 				key=key_sel,
 			)
 		with col_b:
-			if st.button("Select all", use_container_width=True):
+			if st.button("Select all", width=True):
 				st.session_state[key_sel] = options
 				st.rerun()
-			if st.button("Clear", use_container_width=True):
+			if st.button("Clear", width=True):
 				st.session_state[key_sel] = []
 				st.rerun()
 
@@ -330,10 +338,52 @@ def main():
 		index=0,
 	)
 
+	# Monthly spending limit controls (synced slider + number)
+	st.sidebar.subheader("Monthly limit")
+	if "limit_slider" not in st.session_state:
+		st.session_state["limit_slider"] = 1000.0
+		st.session_state["limit_number"] = 1000.0
+
+	st.sidebar.slider(
+		"Set limit (€)",
+		min_value=0.0,
+		max_value=10000.0,
+		step=50.0,
+		key="limit_slider",
+		on_change=_on_limit_slider_change,
+	)
+	st.sidebar.number_input(
+		"Or type limit (€)",
+		min_value=0.0,
+		max_value=100000.0,
+		step=10.0,
+		value=st.session_state.get("limit_number", 1000.0),
+		key="limit_number",
+		on_change=_on_limit_number_change,
+	)
+
+	# Compute month-to-limit usage and show progress
+	month_start, month_end = period_default()
+	# Map filter for this computation
+	repeating_only_for_limit = None
+	if repeating_filter == "Repeating":
+		repeating_only_for_limit = True
+	elif repeating_filter == "Non-repeating":
+		repeating_only_for_limit = False
+	month_df = load_transactions(month_start, month_end, categories=category_filter, repeating_only=repeating_only_for_limit)
+	month_total = float(month_df["amount"].sum()) if not month_df.empty else 0.0
+	limit_val = float(st.session_state.get("limit_number", 1000.0))
+	fraction = 0.0 if limit_val <= 0 else min(month_total / limit_val, 1.0)
+	st.sidebar.progress(fraction, text=f"{month_total:,.2f} / {limit_val:,.2f} € this month")
+	if limit_val > 0 and month_total > limit_val:
+		st.sidebar.error("Monthly limit exceeded")
+	else:
+		st.sidebar.caption("Tracking monthly spend vs limit")
+
 	st.sidebar.markdown("---")
 	# Open multi-day stats button lives in the sidebar
 	if st.session_state.page != "multi":
-		if st.sidebar.button("Open multi-day stats", type="primary", use_container_width=False):
+		if st.sidebar.button("Open multi-day stats", type="primary", width=False):
 			st.session_state.page = "multi"
 			st.rerun()
 	
