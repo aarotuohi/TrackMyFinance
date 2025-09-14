@@ -152,18 +152,18 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
 		by_cat = df.groupby("category", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
 		fig_pie = px.pie(by_cat, names="category", values="amount", title="By category")
 		fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-		st.plotly_chart(fig_pie, width=True)
+		st.plotly_chart(fig_pie)
 
 	with right:
 		by_day = df.groupby("t_date", as_index=False)["amount"].sum()
 		fig_day = px.bar(by_day, x="t_date", y="amount", title="By day")
-		st.plotly_chart(fig_day, width=True)
+		st.plotly_chart(fig_day)
 
 	with st.expander("See table and export"):
 		show = df.copy()
 		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating"}, inplace=True)
 		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating"] if c in show.columns]
-		st.dataframe(show[cols], width=True, hide_index=True)
+		st.dataframe(show[cols], hide_index=True)
 		csv = show.to_csv(index=False).encode("utf-8")
 		st.download_button("Download CSV", data=csv, file_name="transactions.csv", mime="text/csv")
 
@@ -210,18 +210,18 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
 		by_cat = df.groupby("category", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
 		fig_pie = px.pie(by_cat, names="category", values="amount", title="By category")
 		fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-		st.plotly_chart(fig_pie, width=True)
+		st.plotly_chart(fig_pie)
 
 	with right:
 		by_day = df.groupby("t_date", as_index=False)["amount"].sum()
 		fig_day = px.bar(by_day, x="t_date", y="amount", title="By day")
-		st.plotly_chart(fig_day, width=True)
+		st.plotly_chart(fig_day)
 
 	with st.expander("See table and export"):
 		show = df.copy()
 		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating"}, inplace=True)
 		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating"] if c in show.columns]
-		st.dataframe(show[cols], width=True, hide_index=True)
+		st.dataframe(show[cols], hide_index=True)
 		csv = show.to_csv(index=False).encode("utf-8")
 		st.download_button("Download CSV", data=csv, file_name="transactions_selected_dates.csv", mime="text/csv")
 
@@ -253,7 +253,7 @@ def main():
 			index=0,
 		)
 		# Back to Home in sidebar
-		if st.sidebar.button("← Back to Home", width=False):
+		if st.sidebar.button("← Back to Home"):
 			st.session_state.page = "home"
 			st.rerun()
 		st.sidebar.markdown("---")
@@ -291,10 +291,10 @@ def main():
 				key=key_sel,
 			)
 		with col_b:
-			if st.button("Select all", width=True):
+			if st.button("Select all"):
 				st.session_state[key_sel] = options
 				st.rerun()
-			if st.button("Clear", width=True):
+			if st.button("Clear"):
 				st.session_state[key_sel] = []
 				st.rerun()
 
@@ -343,6 +343,9 @@ def main():
 	if "limit_slider" not in st.session_state:
 		st.session_state["limit_slider"] = 1000.0
 		st.session_state["limit_number"] = 1000.0
+	# Ensure number value is initialized even if slider already existed
+	if "limit_number" not in st.session_state:
+		st.session_state["limit_number"] = float(st.session_state.get("limit_slider", 1000.0))
 
 	st.sidebar.slider(
 		"Set limit (€)",
@@ -357,7 +360,6 @@ def main():
 		min_value=0.0,
 		max_value=100000.0,
 		step=10.0,
-		value=st.session_state.get("limit_number", 1000.0),
 		key="limit_number",
 		on_change=_on_limit_number_change,
 	)
@@ -383,7 +385,7 @@ def main():
 	st.sidebar.markdown("---")
 	# Open multi-day stats button lives in the sidebar
 	if st.session_state.page != "multi":
-		if st.sidebar.button("Open multi-day stats", type="primary", width=False):
+		if st.sidebar.button("Open multi-day stats", type="primary"):
 			st.session_state.page = "multi"
 			st.rerun()
 	
