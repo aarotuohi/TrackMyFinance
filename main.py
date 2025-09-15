@@ -7,6 +7,10 @@ import calendar
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+try:
+	import yfinance as yf  # For fetching stock data
+except ImportError:  # Graceful fallback if not installed
+	yf = None
 
 # Config the app
 st.set_page_config(page_title="TrackMyFinance", page_icon="💸", layout="wide")
@@ -56,6 +60,7 @@ def init_db():
 				category TEXT NOT NULL,
 				amount REAL NOT NULL,
 				repeating INTEGER NOT NULL DEFAULT 0,
+				ticker TEXT,
 				created_at TEXT DEFAULT (datetime('now'))
 			)
 			"""
@@ -64,18 +69,21 @@ def init_db():
 		cols = {row[1] for row in conn.execute("PRAGMA table_info(transactions)").fetchall()}
 		if "repeating" not in cols:
 			conn.execute("ALTER TABLE transactions ADD COLUMN repeating INTEGER NOT NULL DEFAULT 0")
+		if "ticker" not in cols:
+			conn.execute("ALTER TABLE transactions ADD COLUMN ticker TEXT")
 
 
-def insert_transaction(t_date: date, description: str, category: str, amount: float, repeating: bool = False):
+def insert_transaction(t_date: date, description: str, category: str, amount: float, repeating: bool = False, ticker: Optional[str] = None):
 	with get_conn() as conn:
 		conn.execute(
-			"INSERT INTO transactions (t_date, description, category, amount, repeating) VALUES (?, ?, ?, ?, ?)",
+			"INSERT INTO transactions (t_date, description, category, amount, repeating, ticker) VALUES (?, ?, ?, ?, ?, ?)",
 			(
 				t_date.isoformat() if isinstance(t_date, date) else str(t_date),
 				(description or "").strip(),
 				category.strip(),
 				float(amount),
 				1 if repeating else 0,
+				(ticker or None).strip().upper() if isinstance(ticker, str) else None,
 			),
 		)
 
@@ -87,7 +95,7 @@ def delete_transaction(tx_id: int):
 # Load transactions with filters
 def load_transactions(start: Optional[date] = None, end: Optional[date] = None, categories: Optional[List[str]] = None, repeating_only: Optional[bool] = None) -> pd.DataFrame:
 	# Build query
-	query = "SELECT id, t_date, description, category, amount, repeating FROM transactions WHERE 1=1"
+	query = "SELECT id, t_date, description, category, amount, repeating, ticker FROM transactions WHERE 1=1"
 	params: list = []
 	if start is not None:
 		query += " AND t_date >= ?"
@@ -164,8 +172,8 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
 
 	with st.expander("See table and export"):
 		show = df.copy()
-		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating"}, inplace=True)
-		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating"] if c in show.columns]
+		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating", "ticker": "Ticker"}, inplace=True)
+		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating", "Ticker"] if c in show.columns]
 		st.dataframe(show[cols], hide_index=True)
 
 		csv = show.to_csv(index=False).encode("utf-8")
@@ -223,8 +231,8 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
 
 	with st.expander("See table and export"):
 		show = df.copy()
-		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating"}, inplace=True)
-		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating"] if c in show.columns]
+		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating", "ticker": "Ticker"}, inplace=True)
+		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating", "Ticker"] if c in show.columns]
 
 		st.dataframe(show[cols], hide_index=True)
 		csv = show.to_csv(index=False).encode("utf-8")
@@ -407,11 +415,20 @@ def main():
 
 	# Category selection outside the form so it updates instantly
 	col_cat, col_other = st.columns([1, 1])
+
+	# Apply pending resets for add_* inputs BEFORE rendering widgets
+	if st.session_state.pop("reset_add_inputs", False):
+		st.session_state["add_other_cat"] = ""
+		st.session_state["add_ticker"] = ""
+
 	with col_cat:
 		st.selectbox("Category", options=CATEGORIES, index=0, key="add_cat")
 	with col_other:
-		if st.session_state.get("add_cat", CATEGORIES[0]) == "Other":
+		current_cat = st.session_state.get("add_cat", CATEGORIES[0])
+		if current_cat == "Other":
 			st.text_input("Insert other category", value="", key="add_other_cat")
+		elif current_cat == "Investments":
+			st.text_input("Ticker (e.g., AAPL, MSFT)", value="", key="add_ticker")
 
 	with st.form("add_tx_form", clear_on_submit=True):
 		col1, col2 = st.columns([1, 1])
@@ -427,13 +444,21 @@ def main():
 			cate = st.session_state.get("add_cat", CATEGORIES[0])
 			other_cat = st.session_state.get("add_other_cat", "") if cate == "Other" else ""
 			final_cat = ensure_category(cate, other_cat)
+			# Validate ticker for investment entries
+			ticker_val = None
+			if final_cat == "Investments":
+				ticker_val = (st.session_state.get("add_ticker", "") or "").strip().upper()
+				if not ticker_val:
+					st.error("Please provide a stock ticker for Investments (e.g., AAPL).")
+					st.stop()
 			if amount <= 0:
 				st.error("Amount must be greater than 0.")
 			else:
-				insert_transaction(t_date, description, final_cat, amount, repeating=repeating_flag)
+				insert_transaction(t_date, description, final_cat, amount, repeating=repeating_flag, ticker=ticker_val)
 				st.success("Added!")
-				# Reseting the field after adding
-				st.session_state["add_other_cat"] = ""
+				# Schedule input reset for next run to avoid Session State mutation error
+				st.session_state["reset_add_inputs"] = True
+				st.rerun()
 
 	# Load and render 
 	repeating_ = None
@@ -444,6 +469,44 @@ def main():
 
 	df = load_transactions(start_date, end_date, categories=category_filter, repeating_only=repeating_)
 	render_summary(df, start_date, end_date)
+
+	# Investments tracker view when Investments is among selected categories
+	if "Investments" in category_filter:
+		st.subheader("Investments — stock tracker")
+		with st.expander("Track your investment tickers"):
+			# Gather available tickers from DB (all investments)
+			inv_df = load_transactions(categories=["Investments"])  # all-time to list tickers
+			available = sorted([t for t in inv_df.get("ticker", pd.Series(dtype=str)).dropna().unique()]) if inv_df is not None and not inv_df.empty else []
+			if not available:
+				st.info("Add an Investment with a Ticker to enable tracking.")
+			else:
+				col1, col2 = st.columns([2, 1])
+				with col1:
+					selected_ticker = st.selectbox("Ticker", options=available)
+				with col2:
+					period_choice = st.selectbox("Period", options=["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"], index=2)
+
+				if yf is None:
+					st.warning("Stock data requires the 'yfinance' package. Install it with: pip install yfinance")
+				else:
+					try:
+						data = yf.Ticker(selected_ticker).history(period=period_choice, auto_adjust=True)
+						if data is None or data.empty:
+							st.error("No price data found for this ticker/period. Check the ticker symbol.")
+						else:
+							last_close = float(data["Close"].iloc[-1])
+							first_close = float(data["Close"].iloc[0])
+							pct = ((last_close / first_close) - 1.0) * 100.0 if first_close else 0.0
+							mc1, mc2 = st.columns(2)
+							mc1.metric("Last close", f"{last_close:,.2f}")
+							mc2.metric("Change", f"{pct:+.2f}%")
+
+							plot_df = data.reset_index()
+							fig = px.line(plot_df, x=plot_df.columns[0], y="Close", title=f"{selected_ticker} price — {period_choice}")
+							st.plotly_chart(fig)
+					except Exception as e:
+						st.error(f"Failed to load stock data: {e}")
+
 	render_delete(df)
 
 
