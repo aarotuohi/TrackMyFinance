@@ -23,11 +23,14 @@ CATEGORIES = [
 	"Rent",
 	"Utilities",
 	"Entertainment",
+	"Subscriptions",
 	"Healthcare",
 	"Education",
 	"Travel",
 	"Shopping",
+	"Investments",
 	"Other",
+	
 ]
 
 # --- Callbacks for synced widgets ---
@@ -57,7 +60,7 @@ def init_db():
 			)
 			"""
 		)
-		# Ensure the 'repeating' column exists for older DBs
+		# Ensure columns
 		cols = {row[1] for row in conn.execute("PRAGMA table_info(transactions)").fetchall()}
 		if "repeating" not in cols:
 			conn.execute("ALTER TABLE transactions ADD COLUMN repeating INTEGER NOT NULL DEFAULT 0")
@@ -164,6 +167,7 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
 		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating"}, inplace=True)
 		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating"] if c in show.columns]
 		st.dataframe(show[cols], hide_index=True)
+
 		csv = show.to_csv(index=False).encode("utf-8")
 		st.download_button("Download CSV", data=csv, file_name="transactions.csv", mime="text/csv")
 
@@ -184,7 +188,7 @@ def render_delete(df: pd.DataFrame):
 				st.rerun()
 
 
-
+# Helper to render multiple day view(dates)
 def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
 	if not selected_dates:
 		st.info("Select one or more dates to see stats.")
@@ -221,6 +225,7 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
 		show = df.copy()
 		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating"}, inplace=True)
 		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating"] if c in show.columns]
+
 		st.dataframe(show[cols], hide_index=True)
 		csv = show.to_csv(index=False).encode("utf-8")
 		st.download_button("Download CSV", data=csv, file_name="transactions_selected_dates.csv", mime="text/csv")
@@ -366,23 +371,29 @@ def main():
 
 	# Compute month-to-limit usage and show progress
 	month_start, month_end = period_default()
+
 	# Map filter for this computation
 	repeating_only_for_limit = None
 	if repeating_filter == "Repeating":
+
 		repeating_only_for_limit = True
 	elif repeating_filter == "Non-repeating":
 		repeating_only_for_limit = False
+
 	month_df = load_transactions(month_start, month_end, categories=category_filter, repeating_only=repeating_only_for_limit)
 	month_total = float(month_df["amount"].sum()) if not month_df.empty else 0.0
 	limit_val = float(st.session_state.get("limit_number", 1000.0))
+
 	fraction = 0.0 if limit_val <= 0 else min(month_total / limit_val, 1.0)
 	st.sidebar.progress(fraction, text=f"{month_total:,.2f} / {limit_val:,.2f} € this month")
+
 	if limit_val > 0 and month_total > limit_val:
 		st.sidebar.error("Monthly limit exceeded")
 	else:
 		st.sidebar.caption("Tracking monthly spend vs limit")
 
 	st.sidebar.markdown("---")
+
 	# Open multi-day stats button lives in the sidebar
 	if st.session_state.page != "multi":
 		if st.sidebar.button("Open multi-day stats", type="primary"):
