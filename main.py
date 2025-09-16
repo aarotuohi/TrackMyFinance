@@ -61,6 +61,8 @@ def init_db():
 				amount REAL NOT NULL,
 				repeating INTEGER NOT NULL DEFAULT 0,
 				ticker TEXT,
+				purchase_price REAL,
+				shares REAL,
 				created_at TEXT DEFAULT (datetime('now'))
 			)
 			"""
@@ -71,12 +73,30 @@ def init_db():
 			conn.execute("ALTER TABLE transactions ADD COLUMN repeating INTEGER NOT NULL DEFAULT 0")
 		if "ticker" not in cols:
 			conn.execute("ALTER TABLE transactions ADD COLUMN ticker TEXT")
+		if "purchase_price" not in cols:
+			conn.execute("ALTER TABLE transactions ADD COLUMN purchase_price REAL")
+		if "shares" not in cols:
+			conn.execute("ALTER TABLE transactions ADD COLUMN shares REAL")
 
 
 def insert_transaction(t_date: date, description: str, category: str, amount: float, repeating: bool = False, ticker: Optional[str] = None):
+	"""Insert a transaction. For Investments with a ticker and available yfinance, compute purchase_price and shares."""
+	purchase_price = None
+	shares = None
+	if category == "Investments" and ticker and isinstance(ticker, str):
+		if yf is not None:
+			try:
+				hist = yf.Ticker(ticker).history(period="1d", auto_adjust=True)
+				if not hist.empty:
+					purchase_price = float(hist["Close"].iloc[-1])
+					if purchase_price > 0:
+						shares = float(amount) / purchase_price
+			except Exception:
+				# Silent fallback; purchase_price/shares remain None
+				pass
 	with get_conn() as conn:
 		conn.execute(
-			"INSERT INTO transactions (t_date, description, category, amount, repeating, ticker) VALUES (?, ?, ?, ?, ?, ?)",
+			"INSERT INTO transactions (t_date, description, category, amount, repeating, ticker, purchase_price, shares) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 			(
 				t_date.isoformat() if isinstance(t_date, date) else str(t_date),
 				(description or "").strip(),
@@ -84,6 +104,8 @@ def insert_transaction(t_date: date, description: str, category: str, amount: fl
 				float(amount),
 				1 if repeating else 0,
 				(ticker or None).strip().upper() if isinstance(ticker, str) else None,
+				purchase_price,
+				shares,
 			),
 		)
 
@@ -96,6 +118,7 @@ def delete_transaction(tx_id: int):
 def load_transactions(start: Optional[date] = None, end: Optional[date] = None, categories: Optional[List[str]] = None, repeating_only: Optional[bool] = None) -> pd.DataFrame:
 	# Build query
 	query = "SELECT id, t_date, description, category, amount, repeating, ticker FROM transactions WHERE 1=1"
+	query = "SELECT id, t_date, description, category, amount, repeating, ticker, purchase_price, shares FROM transactions WHERE 1=1"
 	params: list = []
 	if start is not None:
 		query += " AND t_date >= ?"
@@ -173,7 +196,8 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
 	with st.expander("See table and export"):
 		show = df.copy()
 		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating", "ticker": "Ticker"}, inplace=True)
-		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating", "Ticker"] if c in show.columns]
+		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating", "ticker": "Ticker", "purchase_price": "Purchase Price", "shares": "Shares"}, inplace=True)
+		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating", "Ticker", "Purchase Price", "Shares"] if c in show.columns]
 		st.dataframe(show[cols], hide_index=True)
 
 		csv = show.to_csv(index=False).encode("utf-8")
@@ -232,7 +256,8 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
 	with st.expander("See table and export"):
 		show = df.copy()
 		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating", "ticker": "Ticker"}, inplace=True)
-		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating", "Ticker"] if c in show.columns]
+		show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating", "ticker": "Ticker", "purchase_price": "Purchase Price", "shares": "Shares"}, inplace=True)
+		cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating", "Ticker", "Purchase Price", "Shares"] if c in show.columns]
 
 		st.dataframe(show[cols], hide_index=True)
 		csv = show.to_csv(index=False).encode("utf-8")
@@ -455,6 +480,8 @@ def main():
 				st.error("Amount must be greater than 0.")
 			else:
 				insert_transaction(t_date, description, final_cat, amount, repeating=repeating_flag, ticker=ticker_val)
+				if final_cat == "Investments" and yf is None:
+					st.warning("Install 'yfinance' to compute shares & live profit: pip install yfinance")
 				st.success("Added!")
 				# Schedule input reset for next run to avoid Session State mutation error
 				st.session_state["reset_add_inputs"] = True
@@ -505,7 +532,81 @@ def main():
 							fig = px.line(plot_df, x=plot_df.columns[0], y="Close", title=f"{selected_ticker} price — {period_choice}")
 							st.plotly_chart(fig)
 					except Exception as e:
-						st.error(f"Failed to load stock data: {e}")
+						st.error(f"Failed to load stock data for {selected_ticker}: {e}")
+		# Portfolio summary (aggregated)
+		st.subheader("Portfolio summary")
+		pdf = load_transactions(categories=["Investments"])
+		if pdf is None or pdf.empty or "ticker" not in pdf.columns:
+			st.info("No investment data yet.")
+		else:
+			# Ensure shares; if missing try to backfill using purchase_price
+			inv_rows = pdf.dropna(subset=["ticker"]).copy()
+			# Fetch current prices for unique tickers
+			prices = {}
+			if yf is not None:
+				try:
+					unique_tickers = sorted([t for t in inv_rows["ticker"].dropna().unique()])
+					if unique_tickers:
+						# use yfinance Tickers for efficiency
+						for tck in unique_tickers:
+							try:
+								data_cur = yf.Ticker(tck).history(period="1d", auto_adjust=True)
+								if data_cur is not None and not data_cur.empty:
+									prices[tck] = float(data_cur["Close"].iloc[-1])
+							except Exception:
+								pass
+				except Exception:
+					st.warning("Failed fetching live prices for some tickers.")
+			else:
+				st.info("Install 'yfinance' for live portfolio valuation.")
+
+			portfolio_rows = []
+			for tck, group in inv_rows.groupby("ticker"):
+				total_invested = float(group["amount"].sum())
+				# derive or sum shares
+				shares_vals = group["shares"].dropna()
+				shares_sum = float(shares_vals.sum()) if not shares_vals.empty else None
+				current_price = prices.get(tck)
+				current_value = None
+				profit = None
+				pct = None
+				if current_price and shares_sum:
+					current_value = shares_sum * current_price
+					profit = current_value - total_invested
+					pct = (profit / total_invested * 100.0) if total_invested else None
+				portfolio_rows.append({
+					"Ticker": tck,
+					"Invested": total_invested,
+					"Shares": shares_sum,
+					"Current Price": current_price,
+					"Current Value": current_value,
+					"Profit": profit,
+					"Return %": pct,
+				})
+
+			if not portfolio_rows:
+				st.info("No priced holdings yet (add investments or install yfinance).")
+			else:
+				port_df = pd.DataFrame(portfolio_rows)
+				# Totals
+				total_invested_all = port_df["Invested"].sum()
+				current_value_all = port_df["Current Value"].sum(min_count=1)
+				profit_all = None
+				return_pct_all = None
+				if pd.notna(current_value_all):
+					profit_all = current_value_all - total_invested_all
+					return_pct_all = (profit_all / total_invested_all * 100.0) if total_invested_all else None
+				mc1, mc2, mc3 = st.columns(3)
+				mc1.metric("Invested", f"€{total_invested_all:,.2f}")
+				if current_value_all and pd.notna(current_value_all):
+					mc2.metric("Current value", f"€{current_value_all:,.2f}")
+				if profit_all is not None:
+					mc3.metric("Return", f"€{profit_all:,.2f}" + (f" ({return_pct_all:+.2f}%)" if return_pct_all is not None else ""))
+
+				show_cols = ["Ticker", "Invested", "Shares", "Current Price", "Current Value", "Profit", "Return %"]
+				st.dataframe(port_df[show_cols], hide_index=True)
+				csv_port = port_df.to_csv(index=False).encode("utf-8")
+				st.download_button("Download portfolio CSV", data=csv_port, file_name="portfolio.csv", mime="text/csv")
 
 	render_delete(df)
 
