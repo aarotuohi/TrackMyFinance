@@ -7,19 +7,14 @@ import calendar
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-import json
-from urllib.parse import urlencode
+from io import StringIO
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 try:
 	import yfinance as yf  
 except ImportError:  
 	yf = None
-try:
-	
-	from streamlit_searchbox import st_searchbox  
-except Exception:
-	st_searchbox = None  
+## Removed streamlit_searchbox-based suggestions (now using dropdown catalog)
 
 # Config the app
 st.set_page_config(page_title="TrackMyFinance", page_icon="💸", layout="wide")
@@ -88,60 +83,101 @@ def init_db():
 			conn.execute("ALTER TABLE transactions ADD COLUMN shares REAL")
 
 
-# --- Yahoo Finance symbol search helper ---
-@st.cache_data(show_spinner=False, ttl=600)
-def yahoo_symbol_search(query: str, quotes_count: int = 20, region: str = "US") -> List[dict]:
-	"""Search Yahoo Finance for symbols matching query. Returns list of dicts with keys: symbol, name, exch.
-
-	- Filters to Yahoo Finance quotes and common instrument types
-	- Does not raise on errors; returns [] instead
-	"""
-	q = (query or "").strip()
-	if not q:
-		return []
-	params = {
-		"q": q,
-		"quotesCount": quotes_count,
-		"newsCount": 0,
-		"listsCount": 0,
-		"enableFuzzyQuery": False,
-		"quotesQueryId": "tss_match_phrase_query",
-		"multiQuoteQueryId": "multi_quote_single_token_query",
-		"newsQueryId": "news_cie_vespa",
-		"enableCb": False,
-		"region": region,
-		"lang": "en-US",
-	}
-	url = "https://query1.finance.yahoo.com/v1/finance/search?" + urlencode(params)
+# --- Ticker catalog (categorized dropdown) ---
+def _fetch_text(url: str, timeout: int = 12) -> Optional[str]:
 	try:
-		# Add a browser-like User-Agent to avoid being blocked
 		req = Request(url, headers={
 			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
 		})
-		with urlopen(req, timeout=8) as resp:
-			payload = resp.read().decode("utf-8", errors="ignore")
-			data = json.loads(payload)
-			quotes = data.get("quotes", []) or []
-			results = []
-			for qd in quotes:
-				# Keep only proper Yahoo quotes
-				if not qd.get("isYahooFinance", True):
-					continue
-				qt = (qd.get("quoteType") or "").upper()
-				if qt not in {"EQUITY", "ETF", "MUTUALFUND", "INDEX", "CRYPTOCURRENCY", "CURRENCY"}:
-					continue
-				sym = (qd.get("symbol") or "").strip()
-				if not sym:
-					continue
-				# Only include symbols that start with the query (case-insensitive)
-				if not sym.upper().startswith(q.upper()):
-					continue
-				name = qd.get("shortname") or qd.get("longname") or qd.get("name") or ""
-				exch = qd.get("exchDisp") or qd.get("exchangeDisplay") or qd.get("exchange") or ""
-				results.append({"symbol": sym, "name": name, "exch": exch})
-			return results
-	except (URLError, TimeoutError, json.JSONDecodeError, Exception):
-		return []
+		with urlopen(req, timeout=timeout) as resp:
+			return resp.read().decode("utf-8", errors="ignore")
+	except Exception:
+		return None
+
+@st.cache_data(show_spinner=True, ttl=60 * 60 * 24)
+def _get_us_equity_listings() -> pd.DataFrame:
+	"""Fetch US listings from NASDAQ Trader (NASDAQ + NYSE/AMEX). Returns DataFrame with columns: symbol, name, is_etf."""
+	urls = {
+		"nasdaq": "https://ftp.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt",
+		"other": "https://ftp.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt",
+	}
+	frames = []
+	# NASDAQ
+	text = _fetch_text(urls["nasdaq"]) or ""
+	if text:
+		# Pipe-separated; simple read
+		df = pd.read_csv(StringIO(text), sep="|")
+		if "Symbol" in df.columns and "Security Name" in df.columns and "ETF" in df.columns and "Test Issue" in df.columns:
+			df = df[df["Test Issue"] != "Y"]
+			frames.append(pd.DataFrame({
+				"symbol": df["Symbol"].astype(str).str.strip().str.replace(".", "-", regex=False).str.upper(),
+				"name": df["Security Name"].astype(str).str.strip(),
+				"is_etf": df["ETF"].astype(str).str.upper().eq("Y"),
+			}))
+	# OTHER (NYSE/AMEX)
+	text2 = _fetch_text(urls["other"]) or ""
+	if text2:
+		df2 = pd.read_csv(StringIO(text2), sep="|")
+		if "ACT Symbol" in df2.columns and "Security Name" in df2.columns and "ETF" in df2.columns and "Test Issue" in df2.columns:
+			df2 = df2[df2["Test Issue"] != "Y"]
+			frames.append(pd.DataFrame({
+				"symbol": df2["ACT Symbol"].astype(str).str.strip().str.replace(".", "-", regex=False).str.upper(),
+				"name": df2["Security Name"].astype(str).str.strip(),
+				"is_etf": df2["ETF"].astype(str).str.upper().eq("Y"),
+			}))
+	if frames:
+		all_df = pd.concat(frames, ignore_index=True)
+		# drop duplicates (prefer first occurrence)
+		all_df = all_df.drop_duplicates(subset=["symbol"])
+		return all_df
+	# If fetch fails, return empty DataFrame
+	return pd.DataFrame(columns=["symbol", "name", "is_etf"])
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
+def build_ticker_catalog() -> dict:
+	"""Build categorized ticker catalog.
+
+	Returns dict with keys: 'Stocks', 'Funds/ETFs', 'Crypto', 'Indexes', 'Currencies' mapping to list of dicts {symbol, name}.
+	"""
+	cat = {"Stocks": [], "Funds/ETFs": [], "Crypto": [], "Indexes": [], "Currencies": []}
+	# US equities/ETFs
+	us = _get_us_equity_listings()
+	if us is not None and not us.empty:
+		stocks = us[~us["is_etf"]]
+		funds = us[us["is_etf"]]
+		cat["Stocks"] = (
+			stocks.sort_values("symbol")[ ["symbol", "name"] ]
+			.to_dict(orient="records")
+		)
+		cat["Funds/ETFs"] = (
+			funds.sort_values("symbol")[ ["symbol", "name"] ]
+			.to_dict(orient="records")
+		)
+	# Curated crypto (Yahoo symbols)
+	cat["Crypto"] = [
+		{"symbol": "BTC-USD", "name": "Bitcoin"},
+		{"symbol": "ETH-USD", "name": "Ethereum"},
+		{"symbol": "SOL-USD", "name": "Solana"},
+		{"symbol": "ADA-USD", "name": "Cardano"},
+		{"symbol": "XRP-USD", "name": "XRP"},
+		{"symbol": "DOGE-USD", "name": "Dogecoin"},
+	]
+	# Curated indexes
+	cat["Indexes"] = [
+		{"symbol": "^GSPC", "name": "S&P 500"},
+		{"symbol": "^IXIC", "name": "Nasdaq Composite"},
+		{"symbol": "^DJI", "name": "Dow Jones Industrial Average"},
+		{"symbol": "^NDX", "name": "Nasdaq 100"},
+	]
+	# Curated currency pairs (Yahoo FX symbols)
+	cat["Currencies"] = [
+		{"symbol": "EURUSD=X", "name": "EUR/USD"},
+		{"symbol": "GBPUSD=X", "name": "GBP/USD"},
+		{"symbol": "USDJPY=X", "name": "USD/JPY"},
+		{"symbol": "USDCHF=X", "name": "USD/CHF"},
+		{"symbol": "AUDUSD=X", "name": "AUD/USD"},
+	]
+	return cat
 
 
 def insert_transaction(t_date: date, description: str, category: str, amount: float, repeating: bool = False, ticker: Optional[str] = None):
@@ -510,6 +546,8 @@ def main():
 	if st.session_state.pop("reset_add_inputs", False):
 		st.session_state["add_other_cat"] = ""
 		st.session_state["add_ticker"] = ""
+		st.session_state["add_ticker_label"] = ""
+		st.session_state["add_asset_type"] = "Stocks"
 
 	with col_cat:
 		st.selectbox("Category", options=CATEGORIES, index=0, key="add_cat")
@@ -527,34 +565,18 @@ def main():
 			t_date = st.date_input("Date", value=date.today())
 		with col2:
 			amount = st.number_input("Amount (€)", min_value=0.0, step=0.5, format="%.2f")
-		# Ticker input and suggestions inside the form when Investments selected
+		# Categorized dropdown for ticker selection when Investments selected
 		if st.session_state.get("add_cat") == "Investments":
-			if st_searchbox is not None:
-				def _search_func_form(search: str) -> List[str]:
-					items = yahoo_symbol_search(search, quotes_count=25)
-					return [f"{it['symbol']} — {it['name']} ({it['exch']})".strip() for it in items]
-				picked_label = st_searchbox(
-					_search_func_form,
-					key="form_add_ticker_searchbox",
-					placeholder="Ticker (e.g., AAPL, MSFT)",
-					default=st.session_state.get("add_ticker", ""),
-				)
-				if picked_label:
-					sym = picked_label.split(" — ")[0].strip()
-					if sym:
-						st.session_state["add_ticker"] = sym
-			else:
-				qcol1, qcol2 = st.columns([2, 2])
-				with qcol1:
-					st.text_input("Ticker", value=st.session_state.get("add_ticker", ""), key="add_ticker")
-				with qcol2:
-					q = (st.session_state.get("add_ticker", "") or "").strip()
-					labels = []
-					if len(q) >= 2:
-						suggestions = yahoo_symbol_search(q, quotes_count=25)
-						if suggestions:
-							labels = [f"{it['symbol']} — {it['name']} ({it['exch']})".strip() for it in suggestions]
-					picked = st.selectbox("Suggestions", options=["-"] + labels if labels else ["-"], index=0, key="form_add_ticker_pick")
+			catalog = build_ticker_catalog()
+			asset_types = list(catalog.keys())
+			colt1, colt2 = st.columns([1, 2])
+			with colt1:
+				st.selectbox("Asset type", options=asset_types, key="add_asset_type")
+			with colt2:
+				atype = st.session_state.get("add_asset_type", asset_types[0] if asset_types else "Stocks")
+				entries = catalog.get(atype, [])
+				labels = [f"{it['symbol']} — {it['name']}".strip() for it in entries] if entries else ["No options available"]
+				st.selectbox("Ticker", options=labels, key="add_ticker_label")
 
 		description = st.text_input("Description (optional)")
 		repeating_flag = st.checkbox("Monthly payment (repeating)")
@@ -564,19 +586,14 @@ def main():
 			other_cat = st.session_state.get("add_other_cat", "") if cate == "Other" else ""
 			final_cat = ensure_category(cate, other_cat)
 
-			# Validate ticker 
+			# Validate ticker derived from dropdown
 			ticker_val = None
 			if final_cat == "Investments":
-
-				# Prefer typed/selected ticker
-				ticker_val = (st.session_state.get("add_ticker", "") or "").strip().upper()
+				label = st.session_state.get("add_ticker_label", "")
+				if label and label != "No options available":
+					ticker_val = label.split(" — ")[0].strip().upper()
 				if not ticker_val:
-					picked_label = st.session_state.get("form_add_ticker_pick", "-")
-					if picked_label and picked_label != "-":
-						# Derive symbol from label (format: SYMBOL — Name (Exch))
-						ticker_val = picked_label.split(" — ")[0].strip().upper()
-				if not ticker_val:
-					st.error("Please provide a stock ticker for Investments (e.g., AAPL).")
+					st.error("Please select a ticker from the dropdown.")
 					st.stop()
 			if amount <= 0:
 				st.error("Amount must be greater than 0.")
