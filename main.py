@@ -41,7 +41,7 @@ CATEGORIES = [
 	
 ]
 
-# --- Callbacks for synced widgets ---
+
 def _on_limit_slider_change():
 	st.session_state["limit_number"] = st.session_state.get("limit_slider", 0.0)
 
@@ -83,7 +83,7 @@ def init_db():
 			conn.execute("ALTER TABLE transactions ADD COLUMN shares REAL")
 
 
-# --- Ticker catalog (categorized dropdown) ---
+# Dropdown
 def _fetch_text(url: str, timeout: int = 12) -> Optional[str]:
 	try:
 		req = Request(url, headers={
@@ -93,7 +93,7 @@ def _fetch_text(url: str, timeout: int = 12) -> Optional[str]:
 			return resp.read().decode("utf-8", errors="ignore")
 	except Exception:
 		return None
-
+# Cached for 24 hours
 @st.cache_data(show_spinner=True, ttl=60 * 60 * 24)
 def _get_us_equity_listings() -> pd.DataFrame:
 	"""Fetch US listings from NASDAQ Trader (NASDAQ + NYSE/AMEX). Returns DataFrame with columns: symbol, name, is_etf."""
@@ -105,7 +105,7 @@ def _get_us_equity_listings() -> pd.DataFrame:
 	# NASDAQ
 	text = _fetch_text(urls["nasdaq"]) or ""
 	if text:
-		# Pipe-separated; simple read
+		
 		df = pd.read_csv(StringIO(text), sep="|")
 		if "Symbol" in df.columns and "Security Name" in df.columns and "ETF" in df.columns and "Test Issue" in df.columns:
 			df = df[df["Test Issue"] != "Y"]
@@ -114,7 +114,7 @@ def _get_us_equity_listings() -> pd.DataFrame:
 				"name": df["Security Name"].astype(str).str.strip(),
 				"is_etf": df["ETF"].astype(str).str.upper().eq("Y"),
 			}))
-	# OTHER (NYSE/AMEX)
+	# Other
 	text2 = _fetch_text(urls["other"]) or ""
 	if text2:
 		df2 = pd.read_csv(StringIO(text2), sep="|")
@@ -127,10 +127,10 @@ def _get_us_equity_listings() -> pd.DataFrame:
 			}))
 	if frames:
 		all_df = pd.concat(frames, ignore_index=True)
-		# drop duplicates (prefer first occurrence)
+		# drop duplicates 
 		all_df = all_df.drop_duplicates(subset=["symbol"])
 		return all_df
-	# If fetch fails, return empty DataFrame
+	# If fetch fails
 	return pd.DataFrame(columns=["symbol", "name", "is_etf"])
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
@@ -140,7 +140,7 @@ def build_ticker_catalog() -> dict:
 	Returns dict with keys: 'Stocks', 'Funds/ETFs', 'Crypto', 'Indexes', 'Currencies' mapping to list of dicts {symbol, name}.
 	"""
 	cat = {"Stocks": [], "Funds/ETFs": [], "Crypto": [], "Indexes": [], "Currencies": []}
-	# US equities/ETFs
+	# equities/ETFs
 	us = _get_us_equity_listings()
 	if us is not None and not us.empty:
 		stocks = us[~us["is_etf"]]
@@ -153,7 +153,23 @@ def build_ticker_catalog() -> dict:
 			funds.sort_values("symbol")[ ["symbol", "name"] ]
 			.to_dict(orient="records")
 		)
-	# Curated crypto (Yahoo symbols)
+	else:
+		# Fallback curated lists 
+		cat["Stocks"] = [
+			{"symbol": "AAPL", "name": "Apple Inc."},
+			{"symbol": "MSFT", "name": "Microsoft Corp."},
+			{"symbol": "AMZN", "name": "Amazon.com Inc."},
+			{"symbol": "GOOGL", "name": "Alphabet Inc. (Class A)"},
+			{"symbol": "META", "name": "Meta Platforms Inc."},
+			{"symbol": "TSLA", "name": "Tesla Inc."},
+		]
+		cat["Funds/ETFs"] = [
+			{"symbol": "SPY", "name": "SPDR S&P 500 ETF"},
+			{"symbol": "QQQ", "name": "Invesco QQQ Trust"},
+			{"symbol": "VOO", "name": "Vanguard S&P 500 ETF"},
+			{"symbol": "IVV", "name": "iShares Core S&P 500 ETF"},
+		]
+	# Curated crypto 
 	cat["Crypto"] = [
 		{"symbol": "BTC-USD", "name": "Bitcoin"},
 		{"symbol": "ETH-USD", "name": "Ethereum"},
@@ -169,7 +185,7 @@ def build_ticker_catalog() -> dict:
 		{"symbol": "^DJI", "name": "Dow Jones Industrial Average"},
 		{"symbol": "^NDX", "name": "Nasdaq 100"},
 	]
-	# Curated currency pairs (Yahoo FX symbols)
+	# Curated currency 
 	cat["Currencies"] = [
 		{"symbol": "EURUSD=X", "name": "EUR/USD"},
 		{"symbol": "GBPUSD=X", "name": "GBP/USD"},
@@ -178,6 +194,14 @@ def build_ticker_catalog() -> dict:
 		{"symbol": "AUDUSD=X", "name": "AUD/USD"},
 	]
 	return cat
+
+
+def _refresh_ticker_catalog():
+	"""Clear cached ticker data and force rebuild on next access."""
+	try:
+		st.cache_data.clear()
+	except Exception:
+		pass
 
 
 def insert_transaction(t_date: date, description: str, category: str, amount: float, repeating: bool = False, ticker: Optional[str] = None):
@@ -193,7 +217,7 @@ def insert_transaction(t_date: date, description: str, category: str, amount: fl
 					if purchase_price > 0:
 						shares = float(amount) / purchase_price
 			except Exception:
-				# Silent fallback; purchase_price/shares remain None
+				# Silent fallback
 				pass
 	with get_conn() as conn:
 		conn.execute(
@@ -569,19 +593,37 @@ def main():
 		if st.session_state.get("add_cat") == "Investments":
 			catalog = build_ticker_catalog()
 			asset_types = list(catalog.keys())
-			colt1, colt2 = st.columns([1, 2])
+			# Determine a sensible default: first non-empty category
+			non_empty_types = [t for t in asset_types if catalog.get(t)]
+			default_type = st.session_state.get("add_asset_type") or (non_empty_types[0] if non_empty_types else (asset_types[0] if asset_types else "Stocks"))
+			idx_default = asset_types.index(default_type) if default_type in asset_types else 0
+			colt1, colt2, colt3 = st.columns([1, 2, 1])
 			with colt1:
-				st.selectbox("Asset type", options=asset_types, key="add_asset_type")
+				st.selectbox("Asset type", options=asset_types, index=idx_default, key="add_asset_type")
+			with colt3:
+				refresh_clicked = st.form_submit_button("Refresh list")
+				if refresh_clicked:
+					_refresh_ticker_catalog()
+					st.rerun()
 			with colt2:
-				atype = st.session_state.get("add_asset_type", asset_types[0] if asset_types else "Stocks")
+				atype = st.session_state.get("add_asset_type", default_type)
 				entries = catalog.get(atype, [])
+				# Auto-switch to a non-empty category 
+				if not entries and non_empty_types:
+					atype = non_empty_types[0]
+					entries = catalog.get(atype, [])
+					st.session_state["add_asset_type"] = atype
+					st.caption("Showing available category due to empty listings.")
 				labels = [f"{it['symbol']} — {it['name']}".strip() for it in entries] if entries else ["No options available"]
 				st.selectbox("Ticker", options=labels, key="add_ticker_label")
 
 		description = st.text_input("Description (optional)")
 		repeating_flag = st.checkbox("Monthly payment (repeating)")
 		submitted = st.form_submit_button("Add spending", type="primary")
-		if submitted:
+
+		
+		
+		if submitted and not st.session_state.get("_refresh_clicked", False):
 			cate = st.session_state.get("add_cat", CATEGORIES[0])
 			other_cat = st.session_state.get("add_other_cat", "") if cate == "Other" else ""
 			final_cat = ensure_category(cate, other_cat)
@@ -602,6 +644,7 @@ def main():
 				if final_cat == "Investments" and yf is None:
 					st.warning("Install 'yfinance' to compute shares & live profit: pip install yfinance")
 				st.success("Added!")
+
 				# Schedule input reset 
 				st.session_state["reset_add_inputs"] = True
 				st.rerun()
@@ -616,7 +659,7 @@ def main():
 	df = load_transactions(start_date, end_date, categories=category_filter, repeating_only=repeating_)
 	render_summary(df, start_date, end_date)
 
-	# Investments tracker view when Investments is among selected categories
+	# Investments tracker view 
 	if "Investments" in category_filter:
 		st.subheader("Investments — stock tracker")
 		with st.expander("Track your investment tickers"):
@@ -659,16 +702,17 @@ def main():
 		if pdf is None or pdf.empty or "ticker" not in pdf.columns:
 			st.info("No investment data yet.")
 		else:
-			# Ensure shares; if missing try to backfill using purchase_price
+			# Ensure shares
 			inv_rows = pdf.dropna(subset=["ticker"]).copy()
-			# Fetch current prices for unique tickers
+
+			# Fetch 
 			prices = {}
 			if yf is not None:
 				try:
 					unique_tickers = sorted([t for t in inv_rows["ticker"].dropna().unique()])
 					if unique_tickers:
-						# use yfinance Tickers for efficiency
-						for tck in unique_tickers:
+						# use yfinance tickers
+						for tck in unique_tickers: 
 							try:
 								data_cur = yf.Ticker(tck).history(period="1d", auto_adjust=True)
 								if data_cur is not None and not data_cur.empty:
@@ -683,7 +727,7 @@ def main():
 			portfolio_rows = []
 			for tck, group in inv_rows.groupby("ticker"):
 				total_invested = float(group["amount"].sum())
-				# derive or sum shares
+				
 				shares_vals = group["shares"].dropna()
 				shares_sum = float(shares_vals.sum()) if not shares_vals.empty else None
 				current_price = prices.get(tck)
