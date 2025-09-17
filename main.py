@@ -12,14 +12,14 @@ from urllib.parse import urlencode
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 try:
-	import yfinance as yf  # For fetching stock data
-except ImportError:  # Graceful fallback if not installed
+	import yfinance as yf  
+except ImportError:  
 	yf = None
 try:
-	# Optional: inline suggestions dropdown in the input field
-	from streamlit_searchbox import st_searchbox  # type: ignore
+	
+	from streamlit_searchbox import st_searchbox  
 except Exception:
-	st_searchbox = None  # graceful fallback
+	st_searchbox = None  
 
 # Config the app
 st.set_page_config(page_title="TrackMyFinance", page_icon="💸", layout="wide")
@@ -518,39 +518,8 @@ def main():
 		if current_cat == "Other":
 			st.text_input("Insert other category", value="", key="add_other_cat")
 		elif current_cat == "Investments":
-			# Ticker input with inline suggestions when possible
-			if st_searchbox is not None:
-				def _search_func(search: str) -> List[str]:
-					items = yahoo_symbol_search(search, quotes_count=25)
-					return [f"{it['symbol']} — {it['name']} ({it['exch']})".strip() for it in items]
-				picked_label = st_searchbox(
-					_search_func,
-					key="add_ticker_searchbox",
-					placeholder="Ticker (e.g., AAPL, MSFT)",
-					default=st.session_state.get("add_ticker", ""),
-				)
-				# If user chooses a suggestion, extract the symbol before the em dash
-				if picked_label:
-					sym = picked_label.split(" — ")[0].strip()
-					if sym:
-						st.session_state["add_ticker"] = sym
-			else:
-				# Fallback: basic text input + below-the-input suggestions
-				st.text_input("Ticker", value="", key="add_ticker")
-				q = (st.session_state.get("add_ticker", "") or "").strip()
-				if len(q) >= 2:
-					suggestions = yahoo_symbol_search(q, quotes_count=25)
-					if suggestions:
-						labels = [f"{it['symbol']} — {it['name']} ({it['exch']})".strip() for it in suggestions]
-						label_to_symbol = {labels[i]: suggestions[i]["symbol"] for i in range(len(suggestions))}
-						picked = st.selectbox("Suggestions", options=["-"] + labels, index=0, key="add_ticker_pick")
-						col_apply1, col_apply2 = st.columns([1, 3])
-						with col_apply1:
-							if st.button("Use", key="apply_ticker_pick") and picked != "-":
-								st.session_state["add_ticker"] = label_to_symbol[picked]
-								st.rerun()
-					else:
-						st.caption("No matches found.")
+			# Ticker selection is now inside the form below
+			st.caption("Select ticker in the form below")
 
 	with st.form("add_tx_form", clear_on_submit=True):
 		col1, col2 = st.columns([1, 1])
@@ -558,6 +527,34 @@ def main():
 			t_date = st.date_input("Date", value=date.today())
 		with col2:
 			amount = st.number_input("Amount (€)", min_value=0.0, step=0.5, format="%.2f")
+		# Ticker input and suggestions inside the form when Investments selected
+		if st.session_state.get("add_cat") == "Investments":
+			if st_searchbox is not None:
+				def _search_func_form(search: str) -> List[str]:
+					items = yahoo_symbol_search(search, quotes_count=25)
+					return [f"{it['symbol']} — {it['name']} ({it['exch']})".strip() for it in items]
+				picked_label = st_searchbox(
+					_search_func_form,
+					key="form_add_ticker_searchbox",
+					placeholder="Ticker (e.g., AAPL, MSFT)",
+					default=st.session_state.get("add_ticker", ""),
+				)
+				if picked_label:
+					sym = picked_label.split(" — ")[0].strip()
+					if sym:
+						st.session_state["add_ticker"] = sym
+			else:
+				qcol1, qcol2 = st.columns([2, 2])
+				with qcol1:
+					st.text_input("Ticker", value=st.session_state.get("add_ticker", ""), key="add_ticker")
+				with qcol2:
+					q = (st.session_state.get("add_ticker", "") or "").strip()
+					labels = []
+					if len(q) >= 2:
+						suggestions = yahoo_symbol_search(q, quotes_count=25)
+						if suggestions:
+							labels = [f"{it['symbol']} — {it['name']} ({it['exch']})".strip() for it in suggestions]
+					picked = st.selectbox("Suggestions", options=["-"] + labels if labels else ["-"], index=0, key="form_add_ticker_pick")
 
 		description = st.text_input("Description (optional)")
 		repeating_flag = st.checkbox("Monthly payment (repeating)")
@@ -566,10 +563,18 @@ def main():
 			cate = st.session_state.get("add_cat", CATEGORIES[0])
 			other_cat = st.session_state.get("add_other_cat", "") if cate == "Other" else ""
 			final_cat = ensure_category(cate, other_cat)
-			# Validate ticker for investment entries
+
+			# Validate ticker 
 			ticker_val = None
 			if final_cat == "Investments":
+
+				# Prefer typed/selected ticker
 				ticker_val = (st.session_state.get("add_ticker", "") or "").strip().upper()
+				if not ticker_val:
+					picked_label = st.session_state.get("form_add_ticker_pick", "-")
+					if picked_label and picked_label != "-":
+						# Derive symbol from label (format: SYMBOL — Name (Exch))
+						ticker_val = picked_label.split(" — ")[0].strip().upper()
 				if not ticker_val:
 					st.error("Please provide a stock ticker for Investments (e.g., AAPL).")
 					st.stop()
@@ -580,7 +585,7 @@ def main():
 				if final_cat == "Investments" and yf is None:
 					st.warning("Install 'yfinance' to compute shares & live profit: pip install yfinance")
 				st.success("Added!")
-				# Schedule input reset for next run to avoid Session State mutation error
+				# Schedule input reset 
 				st.session_state["reset_add_inputs"] = True
 				st.rerun()
 
@@ -598,8 +603,8 @@ def main():
 	if "Investments" in category_filter:
 		st.subheader("Investments — stock tracker")
 		with st.expander("Track your investment tickers"):
-			# Gather available tickers from DB (all investments)
-			inv_df = load_transactions(categories=["Investments"])  # all-time to list tickers
+			# Gather available tickers from DB 
+			inv_df = load_transactions(categories=["Investments"]) 
 			available = sorted([t for t in inv_df.get("ticker", pd.Series(dtype=str)).dropna().unique()]) if inv_df is not None and not inv_df.empty else []
 			if not available:
 				st.info("Add an Investment with a Ticker to enable tracking.")
@@ -630,7 +635,8 @@ def main():
 							st.plotly_chart(fig)
 					except Exception as e:
 						st.error(f"Failed to load stock data for {selected_ticker}: {e}")
-		# Portfolio summary (aggregated)
+
+		# Portfolio summary 
 		st.subheader("Portfolio summary")
 		pdf = load_transactions(categories=["Investments"])
 		if pdf is None or pdf.empty or "ticker" not in pdf.columns:
