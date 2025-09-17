@@ -7,10 +7,19 @@ import calendar
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import json
+from urllib.parse import urlencode
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 try:
 	import yfinance as yf  # For fetching stock data
 except ImportError:  # Graceful fallback if not installed
 	yf = None
+try:
+	# Optional: inline suggestions dropdown in the input field
+	from streamlit_searchbox import st_searchbox  # type: ignore
+except Exception:
+	st_searchbox = None  # graceful fallback
 
 # Config the app
 st.set_page_config(page_title="TrackMyFinance", page_icon="💸", layout="wide")
@@ -77,6 +86,62 @@ def init_db():
 			conn.execute("ALTER TABLE transactions ADD COLUMN purchase_price REAL")
 		if "shares" not in cols:
 			conn.execute("ALTER TABLE transactions ADD COLUMN shares REAL")
+
+
+# --- Yahoo Finance symbol search helper ---
+@st.cache_data(show_spinner=False, ttl=600)
+def yahoo_symbol_search(query: str, quotes_count: int = 20, region: str = "US") -> List[dict]:
+	"""Search Yahoo Finance for symbols matching query. Returns list of dicts with keys: symbol, name, exch.
+
+	- Filters to Yahoo Finance quotes and common instrument types
+	- Does not raise on errors; returns [] instead
+	"""
+	q = (query or "").strip()
+	if not q:
+		return []
+	params = {
+		"q": q,
+		"quotesCount": quotes_count,
+		"newsCount": 0,
+		"listsCount": 0,
+		"enableFuzzyQuery": False,
+		"quotesQueryId": "tss_match_phrase_query",
+		"multiQuoteQueryId": "multi_quote_single_token_query",
+		"newsQueryId": "news_cie_vespa",
+		"enableCb": False,
+		"region": region,
+		"lang": "en-US",
+	}
+	url = "https://query1.finance.yahoo.com/v1/finance/search?" + urlencode(params)
+	try:
+		# Add a browser-like User-Agent to avoid being blocked
+		req = Request(url, headers={
+			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
+		})
+		with urlopen(req, timeout=8) as resp:
+			payload = resp.read().decode("utf-8", errors="ignore")
+			data = json.loads(payload)
+			quotes = data.get("quotes", []) or []
+			results = []
+			for qd in quotes:
+				# Keep only proper Yahoo quotes
+				if not qd.get("isYahooFinance", True):
+					continue
+				qt = (qd.get("quoteType") or "").upper()
+				if qt not in {"EQUITY", "ETF", "MUTUALFUND", "INDEX", "CRYPTOCURRENCY", "CURRENCY"}:
+					continue
+				sym = (qd.get("symbol") or "").strip()
+				if not sym:
+					continue
+				# Only include symbols that start with the query (case-insensitive)
+				if not sym.upper().startswith(q.upper()):
+					continue
+				name = qd.get("shortname") or qd.get("longname") or qd.get("name") or ""
+				exch = qd.get("exchDisp") or qd.get("exchangeDisplay") or qd.get("exchange") or ""
+				results.append({"symbol": sym, "name": name, "exch": exch})
+			return results
+	except (URLError, TimeoutError, json.JSONDecodeError, Exception):
+		return []
 
 
 def insert_transaction(t_date: date, description: str, category: str, amount: float, repeating: bool = False, ticker: Optional[str] = None):
@@ -453,7 +518,39 @@ def main():
 		if current_cat == "Other":
 			st.text_input("Insert other category", value="", key="add_other_cat")
 		elif current_cat == "Investments":
-			st.text_input("Ticker (e.g., AAPL, MSFT)", value="", key="add_ticker")
+			# Ticker input with inline suggestions when possible
+			if st_searchbox is not None:
+				def _search_func(search: str) -> List[str]:
+					items = yahoo_symbol_search(search, quotes_count=25)
+					return [f"{it['symbol']} — {it['name']} ({it['exch']})".strip() for it in items]
+				picked_label = st_searchbox(
+					_search_func,
+					key="add_ticker_searchbox",
+					placeholder="Ticker (e.g., AAPL, MSFT)",
+					default=st.session_state.get("add_ticker", ""),
+				)
+				# If user chooses a suggestion, extract the symbol before the em dash
+				if picked_label:
+					sym = picked_label.split(" — ")[0].strip()
+					if sym:
+						st.session_state["add_ticker"] = sym
+			else:
+				# Fallback: basic text input + below-the-input suggestions
+				st.text_input("Ticker", value="", key="add_ticker")
+				q = (st.session_state.get("add_ticker", "") or "").strip()
+				if len(q) >= 2:
+					suggestions = yahoo_symbol_search(q, quotes_count=25)
+					if suggestions:
+						labels = [f"{it['symbol']} — {it['name']} ({it['exch']})".strip() for it in suggestions]
+						label_to_symbol = {labels[i]: suggestions[i]["symbol"] for i in range(len(suggestions))}
+						picked = st.selectbox("Suggestions", options=["-"] + labels, index=0, key="add_ticker_pick")
+						col_apply1, col_apply2 = st.columns([1, 3])
+						with col_apply1:
+							if st.button("Use", key="apply_ticker_pick") and picked != "-":
+								st.session_state["add_ticker"] = label_to_symbol[picked]
+								st.rerun()
+					else:
+						st.caption("No matches found.")
 
 	with st.form("add_tx_form", clear_on_submit=True):
 		col1, col2 = st.columns([1, 1])
