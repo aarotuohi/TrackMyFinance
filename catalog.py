@@ -102,7 +102,7 @@ def build_ticker_catalog() -> dict:
     """
     cat = {"Stocks": [], "Funds/ETFs": [], "Crypto": [], "Indexes": [], "Currencies": []}
 
-    # US equities/ETFs
+    # ETF/STOCKS
     us = _get_us_equity_listings()
     if us is not None and not us.empty:
         stocks = us[~us["is_etf"]]
@@ -114,7 +114,7 @@ def build_ticker_catalog() -> dict:
             ["symbol", "name"]
         ].to_dict(orient="records")
     else:
-        # Fallback curated lists when listings are unavailable (offline or blocked)
+        # Fallback curated lists 
         cat["Stocks"] = [
             {"symbol": "AAPL", "name": "Apple Inc."},
             {"symbol": "MSFT", "name": "Microsoft Corp."},
@@ -130,7 +130,7 @@ def build_ticker_catalog() -> dict:
             {"symbol": "IVV", "name": "iShares Core S&P 500 ETF"},
         ]
 
-    # Curated crypto (Yahoo symbols)
+    # Curated crypto 
     cat["Crypto"] = [
         {"symbol": "BTC-USD", "name": "Bitcoin"},
         {"symbol": "ETH-USD", "name": "Ethereum"},
@@ -148,7 +148,7 @@ def build_ticker_catalog() -> dict:
         {"symbol": "^NDX", "name": "Nasdaq 100"},
     ]
 
-    # Curated currency pairs (Yahoo FX symbols)
+    # Curated currency pairs 
     cat["Currencies"] = [
         {"symbol": "EURUSD=X", "name": "EUR/USD"},
         {"symbol": "GBPUSD=X", "name": "GBP/USD"},
