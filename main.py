@@ -1,21 +1,19 @@
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import List, Optional, Tuple
 from pathlib import Path
 import calendar
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from io import StringIO
-from urllib.request import urlopen, Request
-from urllib.error import URLError
+
+
 from catalog import build_ticker_catalog, refresh_ticker_catalog
 try:
 	import yfinance as yf  
 except ImportError:  
 	yf = None
-## Removed streamlit_searchbox-based suggestions (now using dropdown catalog)
+
 
 # Config the app
 st.set_page_config(page_title="TrackMyFinance", page_icon="💸", layout="wide")
@@ -171,6 +169,7 @@ def ensure_category(cat: str, other_text: Optional[str]) -> str:
 	if cat == "Other":
 		return (other_text or "Other").strip() or "Other"
 	return cat
+
 # Helper
 def render_summary(df: pd.DataFrame, start: date, end: date):
 	if df.empty:
@@ -628,13 +627,15 @@ def main():
 					"Current Price": current_price,
 					"Current Value": current_value,
 					"Profit": profit,
-					"Return %": pct,
+					
+					"Profit %": pct,
 				})
 
 			if not portfolio_rows:
 				st.info("No priced holdings yet (add investments or install yfinance).")
 			else:
 				port_df = pd.DataFrame(portfolio_rows)
+
 				# Totals
 				total_invested_all = port_df["Invested"].sum()
 				current_value_all = port_df["Current Value"].sum(min_count=1)
@@ -642,15 +643,18 @@ def main():
 				return_pct_all = None
 				if pd.notna(current_value_all):
 					profit_all = current_value_all - total_invested_all
+
 					return_pct_all = (profit_all / total_invested_all * 100.0) if total_invested_all else None
-				mc1, mc2, mc3 = st.columns(3)
+				mc1, mc2, mc3, mc4 = st.columns(4)
 				mc1.metric("Invested", f"€{total_invested_all:,.2f}")
 				if current_value_all and pd.notna(current_value_all):
 					mc2.metric("Current value", f"€{current_value_all:,.2f}")
 				if profit_all is not None:
-					mc3.metric("Return", f"€{profit_all:,.2f}" + (f" ({return_pct_all:+.2f}%)" if return_pct_all is not None else ""))
+					mc3.metric("Profit", f"€{profit_all:,.2f}" if profit_all is not None else "")
+				if return_pct_all is not None:
+					mc4.metric("Profit %", f"{return_pct_all:+.2f}%" if return_pct_all is not None else "")
 
-				show_cols = ["Ticker", "Invested", "Shares", "Current Price", "Current Value", "Profit", "Return %"]
+				show_cols = ["Ticker", "Invested", "Shares", "Current Price", "Current Value", "Profit", "Profit %"]
 				st.dataframe(port_df[show_cols], hide_index=True)
 				csv_port = port_df.to_csv(index=False).encode("utf-8")
 				st.download_button("Download portfolio CSV", data=csv_port, file_name="portfolio.csv", mime="text/csv")
