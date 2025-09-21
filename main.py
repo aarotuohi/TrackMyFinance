@@ -5,7 +5,7 @@ import plotly.express as px
 import streamlit as st
 
 from catalog import build_ticker_catalog, refresh_ticker_catalog
-from helpers import (
+from functions import (
 	init_db,
 	insert_transaction,
 	delete_transaction,
@@ -52,11 +52,6 @@ def _on_limit_slider_change():
 
 def _on_limit_number_change():
 	st.session_state["limit_slider"] = st.session_state.get("limit_number", 0.0)
-
-
-def daterange_list(start: date, end: date) -> List[date]:
-	days = (end - start).days
-	return [start + timedelta(days=i) for i in range(days + 1)]
 
 
 def main():
@@ -275,7 +270,7 @@ def main():
 
 	with st.form("add_tx_form", clear_on_submit=True):
 		col1, col2 = st.columns([1, 1])
-			with col1:
+		with col1:
 			t_date = st.date_input("Date", value=date.today())
 		with col2:
 			amount = st.number_input("Amount (€)", min_value=0.0, step=0.5, format="%.2f")

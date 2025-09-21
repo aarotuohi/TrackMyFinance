@@ -3,20 +3,43 @@ from datetime import date, timedelta
 from typing import List, Optional, Tuple
 from pathlib import Path
 import calendar
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 try:
-    import yfinance as yf  # optional
-except ImportError:
+    import yfinance as yf  
+except ImportError:  
     yf = None
 
-
-# Database path anchored to project root
+# Use path for the database (project root)
 PROJECT_ROOT = Path(__file__).resolve().parent
 DB_PATH = str(PROJECT_ROOT / "finance.db")
+
+# Categories (May change in the future)
+CATEGORIES = [
+    "Groceries",
+    "Transportation",
+    "Restaurants",
+    "Rent",
+    "Utilities",
+    "Entertainment",
+    "Subscriptions",
+    "Healthcare",
+    "Education",
+    "Travel",
+    "Shopping",
+    "Investments",
+    "Other",
+]
+
+
+def _on_limit_slider_change():
+    st.session_state["limit_number"] = st.session_state.get("limit_slider", 0.0)
+
+
+def _on_limit_number_change():
+    st.session_state["limit_slider"] = st.session_state.get("limit_number", 0.0)
 
 
 def get_conn():
@@ -29,7 +52,7 @@ def init_db():
             """
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                t_date TEXT NOT NULL,
+                t_date TEXT NOT NULL,             
                 description TEXT,
                 category TEXT NOT NULL,
                 amount REAL NOT NULL,
@@ -53,14 +76,7 @@ def init_db():
             conn.execute("ALTER TABLE transactions ADD COLUMN shares REAL")
 
 
-def insert_transaction(
-    t_date: date,
-    description: str,
-    category: str,
-    amount: float,
-    repeating: bool = False,
-    ticker: Optional[str] = None,
-):
+def insert_transaction(t_date: date, description: str, category: str, amount: float, repeating: bool = False, ticker: Optional[str] = None):
     """Insert a transaction. For Investments with a ticker and available yfinance, compute purchase_price and shares."""
     purchase_price = None
     shares = None
@@ -96,13 +112,9 @@ def delete_transaction(tx_id: int):
         conn.execute("DELETE FROM transactions WHERE id = ?", (int(tx_id),))
 
 
-def load_transactions(
-    start: Optional[date] = None,
-    end: Optional[date] = None,
-    categories: Optional[List[str]] = None,
-    repeating_only: Optional[bool] = None,
-) -> pd.DataFrame:
-    
+def load_transactions(start: Optional[date] = None, end: Optional[date] = None, categories: Optional[List[str]] = None, repeating_only: Optional[bool] = None) -> pd.DataFrame:
+    # Build query
+    query = "SELECT id, t_date, description, category, amount, repeating, ticker FROM transactions WHERE 1=1"
     query = "SELECT id, t_date, description, category, amount, repeating, ticker, purchase_price, shares FROM transactions WHERE 1=1"
     params: list = []
     if start is not None:
@@ -122,77 +134,37 @@ def load_transactions(
 
     # Load into DataFrame
     with get_conn() as conn:
-        df = pd.read_sql_query(query, conn, params=params, parse_dates=["t_date"])  # type: ignore[arg-type]
+        df = pd.read_sql_query(query, conn, params=params, parse_dates=["t_date"]) 
 
     # Post-process
     if not df.empty:
         df = df.sort_values("t_date")
         df["amount"] = df["amount"].astype(float)
+        # repeating bool
         if "repeating" in df.columns:
             df["repeating"] = df["repeating"].astype(int).astype(bool)
     return df
 
-# general
 
 def period_default() -> Tuple[date, date]:
-    """Default period: current month (first day to last day)."""
+    """Default period, current month to date"""
     today = date.today()
     start = today.replace(day=1)
+
     last_day = calendar.monthrange(today.year, today.month)[1]
     end = today.replace(day=last_day)
     return start, end
 
 
 def ensure_category(cat: str, other_text: Optional[str]) -> str:
+    """Helper to handle 'Other' category"""
     if cat == "Other":
         return (other_text or "Other").strip() or "Other"
     return cat
 
 
-def daterange_list(start: date, end: date) -> List[date]:
-    days = (end - start).days
-    return [start + timedelta(days=i) for i in range(days + 1)]
-
-
-# themes
-
-
-def get_plotly_template() -> str:
-    theme = st.session_state.get("theme", "light").lower()
-    return "plotly_dark" if theme == "dark" else "plotly"
-
-
-def apply_theme(theme: Optional[str] = None):
-    """Apply light/dark styling via CSS injection. Stores the theme in session_state."""
-    if theme is None:
-        theme = st.session_state.get("theme", "light")
-    theme = (theme or "light").lower()
-    st.session_state["theme"] = theme
-
-    if theme == "dark":
-        css = """
-        <style>
-        .stApp { background-color: #0e1117; color: #e0e0e0; }
-        [data-testid="stHeader"] { background: transparent; }
-        .block-container { padding-top: 1rem; }
-        div[data-testid="stMetricValue"], div[data-testid="stMetricDelta"] { color: #e0e0e0; }
-        </style>
-        """
-    else:
-        css = """
-        <style>
-        .stApp { background-color: #ffffff; color: #111111; }
-        [data-testid="stHeader"] { background: transparent; }
-        .block-container { padding-top: 1rem; }
-        </style>
-        """
-    st.markdown(css, unsafe_allow_html=True)
-
-
-# rendering
-
-
 def render_summary(df: pd.DataFrame, start: date, end: date):
+    """Render summary statistics and charts for transactions"""
     if df.empty:
         st.info("No transactions in the selected period.")
         return
@@ -210,19 +182,15 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
     st.subheader("Spending breakdown")
     left, right = st.columns([1, 1])
 
-    template = get_plotly_template()
-
     with left:
         by_cat = df.groupby("category", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
         fig_pie = px.pie(by_cat, names="category", values="amount", title="By category")
         fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-        fig_pie.update_layout(template=template)
         st.plotly_chart(fig_pie)
 
     with right:
         by_day = df.groupby("t_date", as_index=False)["amount"].sum()
         fig_day = px.bar(by_day, x="t_date", y="amount", title="By day")
-        fig_day.update_layout(template=template)
         st.plotly_chart(fig_day)
 
     with st.expander("See table and export"):
@@ -237,6 +205,7 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
 
 
 def render_delete(df: pd.DataFrame):
+    """Render delete transaction interface"""
     if df.empty:
         return
     with st.expander("Delete a transaction"):
@@ -253,6 +222,7 @@ def render_delete(df: pd.DataFrame):
 
 
 def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
+    """Helper to render multiple day view(dates)"""
     if not selected_dates:
         st.info("Select one or more dates to see stats.")
         return
@@ -273,19 +243,15 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
     st.subheader("Spending breakdown")
     left, right = st.columns([1, 1])
 
-    template = get_plotly_template()
-
     with left:
         by_cat = df.groupby("category", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
         fig_pie = px.pie(by_cat, names="category", values="amount", title="By category")
         fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-        fig_pie.update_layout(template=template)
         st.plotly_chart(fig_pie)
 
     with right:
         by_day = df.groupby("t_date", as_index=False)["amount"].sum()
         fig_day = px.bar(by_day, x="t_date", y="amount", title="By day")
-        fig_day.update_layout(template=template)
         st.plotly_chart(fig_day)
 
     with st.expander("See table and export"):
@@ -297,3 +263,9 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
         st.dataframe(show[cols], hide_index=True)
         csv = show.to_csv(index=False).encode("utf-8")
         st.download_button("Download CSV", data=csv, file_name="transactions_selected_dates.csv", mime="text/csv")
+
+
+def daterange_list(start: date, end: date) -> List[date]:
+    """Generate a list of dates between start and end (inclusive)"""
+    days = (end - start).days
+    return [start + timedelta(days=i) for i in range(days + 1)]
