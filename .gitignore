@@ -1,2 +1,9 @@
 finance.db
 .vscode/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+instance/
+migrations/
+tests/
