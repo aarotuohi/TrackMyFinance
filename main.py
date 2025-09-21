@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from typing import List
+from typing import List
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -11,14 +12,54 @@ from helpers import (
     ensure_category, render_summary, render_delete, render_summary_for_dates,
     daterange_list, CATEGORIES
 )
+from functions import (
+	init_db,
+	insert_transaction,
+	delete_transaction,
+	load_transactions,
+	period_default,
+	ensure_category,
+	daterange_list,
+	render_summary,
+	render_delete,
+	render_summary_for_dates,
+	apply_theme,
+	get_plotly_template,
+)
 try:
-	import yfinance as yf  
-except ImportError:  
+	import yfinance as yf
+except ImportError:
 	yf = None
 
 
 # Config the app
 st.set_page_config(page_title="TrackMyFinance", page_icon="💸", layout="wide")
+
+
+# Categories (May change in the future)
+CATEGORIES = [
+	"Groceries",
+	"Transportation",
+	"Restaurants",
+	"Rent",
+	"Utilities",
+	"Entertainment",
+	"Subscriptions",
+	"Healthcare",
+	"Education",
+	"Travel",
+	"Shopping",
+	"Investments",
+	"Other",
+	
+]
+
+def _on_limit_slider_change():
+	st.session_state["limit_number"] = st.session_state.get("limit_slider", 0.0)
+
+
+def _on_limit_number_change():
+	st.session_state["limit_slider"] = st.session_state.get("limit_number", 0.0)
 
 
 def main():
@@ -30,8 +71,29 @@ def main():
 	# Simple routing between pages using session state
 	if "page" not in st.session_state:
 		st.session_state.page = "home"
+	if "theme" not in st.session_state:
+		st.session_state["theme"] = "light"
+
+	# Apply theme at start of render
+	apply_theme(st.session_state.get("theme"))
 
 	# Full screen state sidebar in filters (maybe located to somewhere else)
+
+	# Settings page
+	if st.session_state.page == "settings":
+		st.subheader("Settings")
+		choice = st.radio("Theme", options=["Light", "Dark"], index=(1 if st.session_state.get("theme") == "dark" else 0), horizontal=True)
+		if choice:
+			new_theme = choice.lower()
+			if new_theme != st.session_state.get("theme"):
+				apply_theme(new_theme)
+				st.success(f"Theme switched to {choice}.")
+				st.rerun()
+		st.sidebar.header("Navigation")
+		if st.sidebar.button("← Back to Home"):
+			st.session_state.page = "home"
+			st.rerun()
+		return
 
 	if st.session_state.page == "multi":
 		# Sidebar filters for multi-day view
@@ -179,10 +241,14 @@ def main():
 
 	st.sidebar.markdown("---")
 
-	# Open multi-day stats button lives in the sidebar
+	# Open multi-day stats and Settings in the sidebar
 	if st.session_state.page != "multi":
 		if st.sidebar.button("Open multi-day stats", type="primary"):
 			st.session_state.page = "multi"
+			st.rerun()
+	if st.session_state.page != "settings":
+		if st.sidebar.button("Open settings"):
+			st.session_state.page = "settings"
 			st.rerun()
 	
 	
@@ -319,6 +385,7 @@ def main():
 
 							plot_df = data.reset_index()
 							fig = px.line(plot_df, x=plot_df.columns[0], y="Close", title=f"{selected_ticker} price — {period_choice}")
+							fig.update_layout(template=get_plotly_template())
 							st.plotly_chart(fig)
 					except Exception as e:
 						st.error(f"Failed to load stock data for {selected_ticker}: {e}")
@@ -372,7 +439,6 @@ def main():
 					"Current Price": current_price,
 					"Current Value": current_value,
 					"Profit": profit,
-					
 					"Profit %": pct,
 				})
 
