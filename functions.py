@@ -5,6 +5,7 @@ from pathlib import Path
 import calendar
 import pandas as pd
 import plotly.express as px
+import plotly.io as pio
 import streamlit as st
 
 try:
@@ -16,7 +17,7 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).resolve().parent
 DB_PATH = str(PROJECT_ROOT / "finance.db")
 
-# Categories (May change in the future)
+# Categories (single source of truth)
 CATEGORIES = [
     "Groceries",
     "Transportation",
@@ -114,7 +115,6 @@ def delete_transaction(tx_id: int):
 
 def load_transactions(start: Optional[date] = None, end: Optional[date] = None, categories: Optional[List[str]] = None, repeating_only: Optional[bool] = None) -> pd.DataFrame:
     # Build query
-    query = "SELECT id, t_date, description, category, amount, repeating, ticker FROM transactions WHERE 1=1"
     query = "SELECT id, t_date, description, category, amount, repeating, ticker, purchase_price, shares FROM transactions WHERE 1=1"
     params: list = []
     if start is not None:
@@ -195,9 +195,35 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
 
     with st.expander("See table and export"):
         show = df.copy()
-        show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating", "ticker": "Ticker"}, inplace=True)
-        show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating", "ticker": "Ticker", "purchase_price": "Purchase Price", "shares": "Shares"}, inplace=True)
-        cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating", "Ticker", "Purchase Price", "Shares"] if c in show.columns]
+        show.rename(
+            columns={
+                "t_date": "Date",
+                "description": "Description",
+                "category": "Category",
+                "amount": "Amount",
+                "id": "ID",
+                "repeating": "Repeating",
+                "ticker": "Ticker",
+                "purchase_price": "Purchase Price",
+                "shares": "Shares",
+            },
+            inplace=True,
+        )
+        cols = [
+            c
+            for c in [
+                "ID",
+                "Date",
+                "Category",
+                "Description",
+                "Amount",
+                "Repeating",
+                "Ticker",
+                "Purchase Price",
+                "Shares",
+            ]
+            if c in show.columns
+        ]
         st.dataframe(show[cols], hide_index=True)
 
         csv = show.to_csv(index=False).encode("utf-8")
@@ -256,16 +282,71 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
 
     with st.expander("See table and export"):
         show = df.copy()
-        show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating", "ticker": "Ticker"}, inplace=True)
-        show.rename(columns={"t_date": "Date", "description": "Description", "category": "Category", "amount": "Amount", "id": "ID", "repeating": "Repeating", "ticker": "Ticker", "purchase_price": "Purchase Price", "shares": "Shares"}, inplace=True)
-        cols = [c for c in ["ID", "Date", "Category", "Description", "Amount", "Repeating", "Ticker", "Purchase Price", "Shares"] if c in show.columns]
+        show.rename(
+            columns={
+                "t_date": "Date",
+                "description": "Description",
+                "category": "Category",
+                "amount": "Amount",
+                "id": "ID",
+                "repeating": "Repeating",
+                "ticker": "Ticker",
+                "purchase_price": "Purchase Price",
+                "shares": "Shares",
+            },
+            inplace=True,
+        )
+        cols = [
+            c
+            for c in [
+                "ID",
+                "Date",
+                "Category",
+                "Description",
+                "Amount",
+                "Repeating",
+                "Ticker",
+                "Purchase Price",
+                "Shares",
+            ]
+            if c in show.columns
+        ]
 
         st.dataframe(show[cols], hide_index=True)
         csv = show.to_csv(index=False).encode("utf-8")
-        st.download_button("Download CSV", data=csv, file_name="transactions_selected_dates.csv", mime="text/csv")
+        st.download_button(
+            "Download CSV",
+            data=csv,
+            file_name="transactions_selected_dates.csv",
+            mime="text/csv",
+        )
 
 
 def daterange_list(start: date, end: date) -> List[date]:
     """Generate a list of dates between start and end (inclusive)"""
     days = (end - start).days
     return [start + timedelta(days=i) for i in range(days + 1)]
+
+
+# Theming utilities kept here to avoid duplication across files
+def apply_theme(theme: str = "light") -> None:
+    """Apply light/dark theme for Streamlit and Plotly."""
+    theme = (theme or "light").lower()
+    st.session_state["theme"] = theme
+    # Plotly template
+    pio.templates.default = "plotly_dark" if theme == "dark" else "plotly_white"
+    # Streamlit CSS tweaks (optional basic background)
+    if theme == "dark":
+        st.markdown(
+            """
+            <style>
+            body, .stApp { background-color: #0E1117; color: #FAFAFA; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def get_plotly_template() -> str:
+    """Return the current plotly template based on theme."""
+    return "plotly_dark" if st.session_state.get("theme") == "dark" else "plotly_white"

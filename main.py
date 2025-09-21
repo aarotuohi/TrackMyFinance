@@ -1,17 +1,9 @@
 from datetime import date, timedelta
-from typing import List
-from typing import List
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 from catalog import build_ticker_catalog, refresh_ticker_catalog
-from helpers import (
-    _on_limit_slider_change, _on_limit_number_change, get_conn, init_db,
-    insert_transaction, delete_transaction, load_transactions, period_default,
-    ensure_category, render_summary, render_delete, render_summary_for_dates,
-    daterange_list, CATEGORIES
-)
 from functions import (
 	init_db,
 	insert_transaction,
@@ -23,8 +15,11 @@ from functions import (
 	render_summary,
 	render_delete,
 	render_summary_for_dates,
+	_on_limit_slider_change,
+	_on_limit_number_change,
 	apply_theme,
 	get_plotly_template,
+	CATEGORIES,
 )
 try:
 	import yfinance as yf
@@ -36,30 +31,7 @@ except ImportError:
 st.set_page_config(page_title="TrackMyFinance", page_icon="💸", layout="wide")
 
 
-# Categories (May change in the future)
-CATEGORIES = [
-	"Groceries",
-	"Transportation",
-	"Restaurants",
-	"Rent",
-	"Utilities",
-	"Entertainment",
-	"Subscriptions",
-	"Healthcare",
-	"Education",
-	"Travel",
-	"Shopping",
-	"Investments",
-	"Other",
-	
-]
-
-def _on_limit_slider_change():
-	st.session_state["limit_number"] = st.session_state.get("limit_slider", 0.0)
-
-
-def _on_limit_number_change():
-	st.session_state["limit_slider"] = st.session_state.get("limit_number", 0.0)
+# Categories, handlers, etc. are imported from functions to avoid duplication.
 
 
 def main():
