@@ -65,11 +65,6 @@ def main():
 			apply_theme(new_theme)
 			st.rerun()
 
-		# Make Settings easy to discover from top bar
-		if st.button("⚙️ Settings", use_container_width=True):
-			st.session_state.page = "settings"
-			st.rerun()
-
 	# Full screen state sidebar in filters (maybe located to somewhere else)
 
 	# Settings page
