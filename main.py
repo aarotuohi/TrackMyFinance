@@ -49,12 +49,34 @@ def main():
 	# Apply theme at start of render
 	apply_theme(st.session_state.get("theme"))
 
+	# Theme slider
+	tr_left, tr_right = st.columns([0.75, 0.25])
+	with tr_right:
+		current_theme = st.session_state.get("theme", "light")
+		dark_on = st.toggle(
+			"Dark mode",
+			value=(current_theme == "dark"),
+			help="Toggle between light and dark theme",
+			key="theme_toggle",
+		)
+		# Apply theme immediately if changed
+		new_theme = "dark" if dark_on else "light"
+		if new_theme != current_theme:
+			apply_theme(new_theme)
+			st.rerun()
+
 	# Full screen state sidebar in filters (maybe located to somewhere else)
 
 	# Settings page
 	if st.session_state.page == "settings":
 		st.subheader("Settings")
-		choice = st.radio("Theme", options=["Light", "Dark"], index=(1 if st.session_state.get("theme") == "dark" else 0), horizontal=True)
+		choice = st.radio(
+			"Theme",
+			options=["Light", "Dark"],
+			index=(1 if st.session_state.get("theme") == "dark" else 0),
+			horizontal=True,
+			help="Prefer using the top-right switch for quick changes.",
+		)
 		if choice:
 			new_theme = choice.lower()
 			if new_theme != st.session_state.get("theme"):
