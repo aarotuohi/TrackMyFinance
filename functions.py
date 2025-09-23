@@ -13,11 +13,11 @@ try:
 except ImportError:  
     yf = None
 
-# Use path for the database (project root)
+# Use path for the database 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DB_PATH = str(PROJECT_ROOT / "finance.db")
 
-# Categories (single source of truth)
+# Categories 
 CATEGORIES = [
     "Groceries",
     "Transportation",
@@ -76,9 +76,9 @@ def init_db():
         if "shares" not in cols:
             conn.execute("ALTER TABLE transactions ADD COLUMN shares REAL")
 
-
+# insert transaction
 def insert_transaction(t_date: date, description: str, category: str, amount: float, repeating: bool = False, ticker: Optional[str] = None):
-    """Insert a transaction. For Investments with a ticker and available yfinance, compute purchase_price and shares."""
+    
     purchase_price = None
     shares = None
     if category == "Investments" and ticker and isinstance(ticker, str):
@@ -90,7 +90,7 @@ def insert_transaction(t_date: date, description: str, category: str, amount: fl
                     if purchase_price > 0:
                         shares = float(amount) / purchase_price
             except Exception:
-                # Silent fallback
+                st.error("Failed to fetch stock data. Please check the ticker symbol.")
                 pass
     with get_conn() as conn:
         conn.execute(
@@ -140,14 +140,14 @@ def load_transactions(start: Optional[date] = None, end: Optional[date] = None, 
     if not df.empty:
         df = df.sort_values("t_date")
         df["amount"] = df["amount"].astype(float)
-        # repeating bool
+        
         if "repeating" in df.columns:
             df["repeating"] = df["repeating"].astype(int).astype(bool)
     return df
 
-
+# default period
 def period_default() -> Tuple[date, date]:
-    """Default period, current month to date"""
+    
     today = date.today()
     start = today.replace(day=1)
 
@@ -155,16 +155,37 @@ def period_default() -> Tuple[date, date]:
     end = today.replace(day=last_day)
     return start, end
 
+# date default from pref
+def period_default_from_pref(pref: Optional[str]) -> Tuple[date, date]:
+   
+    pref = (pref or "This month").lower()
+    today = date.today()
+
+    if pref in ("last 7 days", "7d"):
+        start = today - timedelta(days=6)
+        end = today
+    elif pref in ("last 30 days", "30d"):
+        start = today - timedelta(days=29)
+        end = today
+    elif pref in ("this year", "ytd"):
+        start = today.replace(month=1, day=1)
+        end = today
+    else:  
+        start = today.replace(day=1)
+        last_day = calendar.monthrange(today.year, today.month)[1]
+        end = today.replace(day=last_day)
+    return start, end
+
 
 def ensure_category(cat: str, other_text: Optional[str]) -> str:
-    """Helper to handle 'Other' category"""
+   
     if cat == "Other":
         return (other_text or "Other").strip() or "Other"
     return cat
 
 
 def render_summary(df: pd.DataFrame, start: date, end: date):
-    """Render summary statistics and charts for transactions"""
+    
     if df.empty:
         st.info("No transactions in the selected period.")
         return
@@ -174,8 +195,8 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
     avg_daily = total_spent / max(n_days, 1)
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Total spent", f"€{total_spent:,.2f}")
-    c2.metric("Avg per day", f"€{avg_daily:,.2f}")
+    c1.metric("Total spent", fmt_currency(total_spent))
+    c2.metric("Avg per day", fmt_currency(avg_daily))
     c3.metric("Transactions", f"{len(df):,}")
 
     # Charts
@@ -229,14 +250,14 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
         csv = show.to_csv(index=False).encode("utf-8")
         st.download_button("Download CSV", data=csv, file_name="transactions.csv", mime="text/csv")
 
-
+#render delete
 def render_delete(df: pd.DataFrame):
-    """Render delete transaction interface"""
+    
     if df.empty:
         return
     with st.expander("Delete a transaction"):
         options = {
-            f"#{row.id} | {row.t_date.date()} | €{row.amount:.2f} | {row.category} | {row.description or ''}": int(row.id)
+            f"#{row.id} | {row.t_date.date()} | {fmt_currency(row.amount)} | {row.category} | {row.description or ''}": int(row.id)
             for _, row in df.iterrows()
         }
         label = st.selectbox("Select transaction to delete", ["-"] + list(options.keys()))
@@ -246,9 +267,9 @@ def render_delete(df: pd.DataFrame):
                 st.success("Deleted.")
                 st.rerun()
 
-
+# render multiple days
 def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
-    """Helper to render multiple day view(dates)"""
+    
     if not selected_dates:
         st.info("Select one or more dates to see stats.")
         return
@@ -262,8 +283,8 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
     avg_daily = total_spent / max(days_count, 1)
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Total spent", f"€{total_spent:,.2f}")
-    c2.metric("Avg per selected day", f"€{avg_daily:,.2f}")
+    c1.metric("Total spent", fmt_currency(total_spent))
+    c2.metric("Avg per selected day", fmt_currency(avg_daily))
     c3.metric("Transactions", f"{len(df):,}")
 
     st.subheader("Spending breakdown")
@@ -323,19 +344,19 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
 
 
 def daterange_list(start: date, end: date) -> List[date]:
-    """Generate a list of dates between start and end (inclusive)"""
+    
     days = (end - start).days
     return [start + timedelta(days=i) for i in range(days + 1)]
 
 
-# Theming utilities kept here to avoid duplication across files
+# Theming utilities kept 
 def apply_theme(theme: str = "light") -> None:
-    """Apply light/dark theme for Streamlit and Plotly."""
+    
     theme = (theme or "light").lower()
     st.session_state["theme"] = theme
-    # Plotly template
+    
     pio.templates.default = "plotly_dark" if theme == "dark" else "plotly_white"
-    # Streamlit CSS tweaks (optional basic background)
+    
     if theme == "dark":
         st.markdown(
             """
@@ -346,7 +367,23 @@ def apply_theme(theme: str = "light") -> None:
             unsafe_allow_html=True,
         )
 
-
+# plotly template
 def get_plotly_template() -> str:
-    """Return the current plotly template based on theme."""
+
     return "plotly_dark" if st.session_state.get("theme") == "dark" else "plotly_white"
+
+# currency getter
+def get_currency_symbol() -> str:
+    
+    sym = st.session_state.get("currency_symbol")
+    if isinstance(sym, str) and sym.strip():
+        return sym.strip()
+    return "€"
+
+# currency formatter
+
+def fmt_currency(value: Optional[float]) -> str:
+    
+    if value is None or pd.isna(value):
+        return ""
+    return f"{get_currency_symbol()}{float(value):,.2f}"
