@@ -10,6 +10,7 @@ from functions import (
 	delete_transaction,
 	load_transactions,
 	period_default,
+    period_default_from_pref,
 	ensure_category,
 	daterange_list,
 	render_summary,
@@ -19,6 +20,8 @@ from functions import (
 	_on_limit_number_change,
 	apply_theme,
 	get_plotly_template,
+    get_currency_symbol,
+    fmt_currency,
 	CATEGORIES,
 )
 try:
@@ -29,9 +32,6 @@ except ImportError:
 
 # Config the app
 st.set_page_config(page_title="TrackMyFinance", page_icon="💸", layout="wide")
-
-
-# Categories, handlers, etc. are imported from functions to avoid duplication.
 
 
 def main():
@@ -49,7 +49,7 @@ def main():
 	# Apply theme at start of render
 	apply_theme(st.session_state.get("theme"))
 
-	# Theme slider
+	# Theme slider 
 	tr_left, tr_right = st.columns([0.75, 0.25])
 	with tr_right:
 		current_theme = st.session_state.get("theme", "light")
@@ -59,13 +59,73 @@ def main():
 			help="Toggle between light and dark theme",
 			key="theme_toggle",
 		)
-		# Apply theme immediately if changed
+		# Apply theme immediately 
 		new_theme = "dark" if dark_on else "light"
 		if new_theme != current_theme:
 			apply_theme(new_theme)
 			st.rerun()
 
+	# Sidebar settings
+	with st.sidebar.container():
+		st.markdown("### Settings")
+		# Theme
+		dark_sidebar = st.toggle(
+			"Dark mode",
+			value=(st.session_state.get("theme") == "dark"),
+			help="Quickly toggle theme",
+			key="theme_toggle_sidebar",
+		)
+		if dark_sidebar != (st.session_state.get("theme") == "dark"):
+			apply_theme("dark" if dark_sidebar else "light")
+			st.rerun()
+
+		# Currency
+		curr = st.selectbox(
+			"Currency",
+			options=["€", "$", "£", "¥"],
+			index=["€", "$", "£", "¥"].index(st.session_state.get("currency_symbol", "€")),
+			help="Choose the currency symbol used in totals",
+		)
+		if curr != st.session_state.get("currency_symbol"):
+			st.session_state["currency_symbol"] = curr
+			st.rerun()
+
+		# Default period preference
+		per_pref = st.selectbox(
+			"Default period",
+			options=["This month", "Last 7 days", "Last 30 days", "This year"],
+			index=["This month", "Last 7 days", "Last 30 days", "This year"].index(
+				st.session_state.get("default_period_pref", "This month")
+			),
+			help="Controls the initial period shown on Home and Multi-day views",
+		)
+		if per_pref != st.session_state.get("default_period_pref"):
+			st.session_state["default_period_pref"] = per_pref
+			st.rerun()
+
+		# Layout density
+		compact = st.toggle(
+			"Compact layout",
+			value=bool(st.session_state.get("compact_layout", False)),
+			help="Reduce spacing in tables and controls",
+		)
+		st.session_state["compact_layout"] = compact
+
+		st.markdown("---")
+
 	# Full screen state sidebar in filters (maybe located to somewhere else)
+	if st.session_state.get("compact_layout"):
+		st.markdown(
+			"""
+			<style>
+			/* Reduce dataframe cell padding */
+			[data-testid="stStyledDataFrame"] td, [data-testid="stStyledDataFrame"] th { padding: 0.25rem 0.5rem; }
+			/* Reduce general element spacing a bit */
+			.css-1dp5vir, .block-container { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+			</style>
+			""",
+			unsafe_allow_html=True,
+		)
 
 	# Settings page
 	if st.session_state.page == "settings":
@@ -161,9 +221,11 @@ def main():
 		render_summary_for_dates(df, st.session_state.get(key_sel, []))
 		return
 
-	# Sidebar filters (Home)
+	# Sidebar filters HOme
 	st.sidebar.header("Filters")
-	default_start, default_end = period_default()
+
+	# Use preferred default period
+	default_start, default_end = period_default_from_pref(st.session_state.get("default_period_pref"))
 	period = st.sidebar.date_input(
 		"Period",
 		value=(default_start, default_end),
@@ -177,19 +239,19 @@ def main():
 
 	category_filter = st.sidebar.multiselect("Categories", options=CATEGORIES, default=CATEGORIES)
 
-	# Add repeating filter on Home as well
+	# Add repeating filter on Home
 	repeating_filter = st.sidebar.selectbox(
 		"Repeating filter",
 		options=["All", "Repeating", "Non-repeating"],
 		index=0,
 	)
 
-	# Monthly spending limit controls (synced slider + number)
+	# Monthly spending limit controls
 	st.sidebar.subheader("Monthly limit")
 	if "limit_slider" not in st.session_state:
 		st.session_state["limit_slider"] = 1000.0
 		st.session_state["limit_number"] = 1000.0
-	# Ensure number value is initialized even if slider already existed
+	# Ensure number value is initialized 
 	if "limit_number" not in st.session_state:
 		st.session_state["limit_number"] = float(st.session_state.get("limit_slider", 1000.0))
 
@@ -211,7 +273,7 @@ def main():
 	)
 
 	# Compute month-to-limit usage and show progress
-	month_start, month_end = period_default()
+	month_start, month_end = period_default_from_pref(st.session_state.get("default_period_pref"))
 
 	# Map filter for this computation
 	repeating_only_for_limit = None
@@ -226,7 +288,10 @@ def main():
 	limit_val = float(st.session_state.get("limit_number", 1000.0))
 
 	fraction = 0.0 if limit_val <= 0 else min(month_total / limit_val, 1.0)
-	st.sidebar.progress(fraction, text=f"{month_total:,.2f} / {limit_val:,.2f} € this month")
+	st.sidebar.progress(
+		fraction,
+		text=f"{fmt_currency(month_total)} / {fmt_currency(limit_val)} this period",
+	)
 
 	if limit_val > 0 and month_total > limit_val:
 		st.sidebar.error("Monthly limit exceeded")
@@ -276,11 +341,11 @@ def main():
 			t_date = st.date_input("Date", value=date.today())
 		with col2:
 			amount = st.number_input("Amount (€)", min_value=0.0, step=0.5, format="%.2f")
-		# Categorized dropdown for ticker selection when Investments selected
+		# Categorized dropdown 
 		if st.session_state.get("add_cat") == "Investments":
 			catalog = build_ticker_catalog()
 			asset_types = list(catalog.keys())
-			# Determine a sensible default: first non-empty category
+			# Determine default
 			non_empty_types = [t for t in asset_types if catalog.get(t)]
 			default_type = st.session_state.get("add_asset_type") or (non_empty_types[0] if non_empty_types else (asset_types[0] if asset_types else "Stocks"))
 			idx_default = asset_types.index(default_type) if default_type in asset_types else 0
@@ -315,7 +380,7 @@ def main():
 			other_cat = st.session_state.get("add_other_cat", "") if cate == "Other" else ""
 			final_cat = ensure_category(cate, other_cat)
 
-			# Validate ticker derived from dropdown
+			# Validate ticker derived 
 			ticker_val = None
 			if final_cat == "Investments":
 				label = st.session_state.get("add_ticker_label", "")
@@ -350,7 +415,7 @@ def main():
 	if "Investments" in category_filter:
 		st.subheader("Investments — stock tracker")
 		with st.expander("Track your investment tickers"):
-			# Gather available tickers from DB 
+			# Gather available tickers DB
 			inv_df = load_transactions(categories=["Investments"]) 
 			available = sorted([t for t in inv_df.get("ticker", pd.Series(dtype=str)).dropna().unique()]) if inv_df is not None and not inv_df.empty else []
 			if not available:
@@ -451,11 +516,11 @@ def main():
 
 					return_pct_all = (profit_all / total_invested_all * 100.0) if total_invested_all else None
 				mc1, mc2, mc3, mc4 = st.columns(4)
-				mc1.metric("Invested", f"€{total_invested_all:,.2f}")
+				mc1.metric("Invested", fmt_currency(total_invested_all))
 				if current_value_all and pd.notna(current_value_all):
-					mc2.metric("Current value", f"€{current_value_all:,.2f}")
+					mc2.metric("Current value", fmt_currency(current_value_all))
 				if profit_all is not None:
-					mc3.metric("Profit", f"€{profit_all:,.2f}" if profit_all is not None else "")
+					mc3.metric("Profit", fmt_currency(profit_all) if profit_all is not None else "")
 				if return_pct_all is not None:
 					mc4.metric("Profit %", f"{return_pct_all:+.2f}%" if return_pct_all is not None else "")
 
