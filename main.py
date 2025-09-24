@@ -294,7 +294,7 @@ def main():
 	# Category selection outside the form so it updates instantly
 	col_cat, col_other = st.columns([1, 1])
 
-	# Apply pending resets for add_* inputs BEFORE rendering widgets
+	# Apply pending resets 
 	if st.session_state.pop("reset_add_inputs", False):
 		st.session_state["add_other_cat"] = ""
 		st.session_state["add_ticker"] = ""
@@ -308,7 +308,7 @@ def main():
 		if current_cat == "Other":
 			st.text_input("Insert other category", value="", key="add_other_cat")
 		elif current_cat == "Investments":
-			# Ticker selection is now inside the form below
+			
 			st.caption("Select ticker in the form below")
 
 	with st.form("add_tx_form", clear_on_submit=True):
@@ -317,10 +317,12 @@ def main():
 			t_date = st.date_input("Date", value=date.today())
 		with col2:
 			amount = st.number_input("Amount (€)", min_value=0.0, step=0.5, format="%.2f")
+
 		# Categorized dropdown 
 		if st.session_state.get("add_cat") == "Investments":
 			catalog = build_ticker_catalog()
 			asset_types = list(catalog.keys())
+
 			# Determine default
 			non_empty_types = [t for t in asset_types if catalog.get(t)]
 			default_type = st.session_state.get("add_asset_type") or (non_empty_types[0] if non_empty_types else (asset_types[0] if asset_types else "Stocks"))
@@ -336,6 +338,7 @@ def main():
 			with colt2:
 				atype = st.session_state.get("add_asset_type", default_type)
 				entries = catalog.get(atype, [])
+
 				# Auto-switch to a non-empty category 
 				if not entries and non_empty_types:
 					atype = non_empty_types[0]
@@ -391,6 +394,7 @@ def main():
 	if "Investments" in category_filter:
 		st.subheader("Investments — stock tracker")
 		with st.expander("Track your investment tickers"):
+
 			# Gather available tickers DB
 			inv_df = load_transactions(categories=["Investments"]) 
 			available = sorted([t for t in inv_df.get("ticker", pd.Series(dtype=str)).dropna().unique()]) if inv_df is not None and not inv_df.empty else []
