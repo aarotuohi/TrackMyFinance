@@ -127,27 +127,7 @@ def main():
 			unsafe_allow_html=True,
 		)
 
-	# Settings page
-	if st.session_state.page == "settings":
-		st.subheader("Settings")
-		choice = st.radio(
-			"Theme",
-			options=["Light", "Dark"],
-			index=(1 if st.session_state.get("theme") == "dark" else 0),
-			horizontal=True,
-			help="Prefer using the top-right switch for quick changes.",
-		)
-		if choice:
-			new_theme = choice.lower()
-			if new_theme != st.session_state.get("theme"):
-				apply_theme(new_theme)
-				st.success(f"Theme switched to {choice}.")
-				st.rerun()
-		st.sidebar.header("Navigation")
-		if st.sidebar.button("← Back to Home"):
-			st.session_state.page = "home"
-			st.rerun()
-		return
+	# Settings page removed; settings are now always available in the sidebar
 
 	if st.session_state.page == "multi":
 		# Sidebar filters for multi-day view
@@ -300,14 +280,10 @@ def main():
 
 	st.sidebar.markdown("---")
 
-	# Open multi-day stats and Settings in the sidebar
+	# Open multi-day stats in the sidebar
 	if st.session_state.page != "multi":
 		if st.sidebar.button("Open multi-day stats", type="primary"):
 			st.session_state.page = "multi"
-			st.rerun()
-	if st.session_state.page != "settings":
-		if st.sidebar.button("Open settings"):
-			st.session_state.page = "settings"
 			st.rerun()
 	
 	
