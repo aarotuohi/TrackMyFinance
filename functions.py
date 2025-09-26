@@ -75,6 +75,29 @@ def init_db():
             conn.execute("ALTER TABLE transactions ADD COLUMN purchase_price REAL")
         if "shares" not in cols:
             conn.execute("ALTER TABLE transactions ADD COLUMN shares REAL")
+        if "created_at" not in cols:
+            conn.execute("ALTER TABLE transactions ADD COLUMN created_at TEXT DEFAULT (datetime('now'))")
+        
+        if "currency" not in cols:
+            conn.execute("ALTER TABLE transactions ADD COLUMN currency TEXT")
+        if "fx_rate" not in cols:
+            conn.execute("ALTER TABLE transactions ADD COLUMN fx_rate REAL DEFAULT 1.0")
+        if "updated_at" not in cols:
+            conn.execute("ALTER TABLE transactions ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))")
+
+        
+        try:
+            conn.execute("UPDATE transactions SET fx_rate = 1.0 WHERE fx_rate IS NULL")
+        except Exception:
+            pass
+        try:
+            conn.execute("UPDATE transactions SET updated_at = COALESCE(updated_at, created_at, datetime('now')) WHERE updated_at IS NULL")
+        except Exception:
+            pass
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_t_date ON transactions(t_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_repeating ON transactions(repeating)")
 
 # insert transaction
 def insert_transaction(t_date: date, description: str, category: str, amount: float, repeating: bool = False, ticker: Optional[str] = None):
