@@ -30,6 +30,67 @@ except ImportError:
 	yf = None
 
 
+# Fast batch fetch
+if yf is not None:
+	@st.cache_data(show_spinner=False, ttl=600)
+	def fetch_latest_close_prices(tickers: list[str]) -> dict[str, float]:
+		
+		prices: dict[str, float] = {}
+		if not tickers:
+			return prices
+		# First try batch download
+		try:
+			# Batch download 
+			df = yf.download(
+				tickers=tickers,
+				period="1d",
+				auto_adjust=True,
+				group_by="ticker",
+				threads=True,
+				progress=False,
+			)
+			if df is not None and not df.empty:
+				# Multi-index 
+				if isinstance(df.columns, pd.MultiIndex):
+					for t in tickers:
+						val = None
+						# Try ticker, close
+						if (t, "Close") in df.columns:
+							series = df[(t, "Close")]
+							if series is not None and not series.empty:
+								val = series.iloc[-1]
+						# Try variant
+						elif ("Close", t) in df.columns:
+							series = df[("Close", t)]
+							if series is not None and not series.empty:
+								val = series.iloc[-1]
+						if pd.notna(val):
+							prices[t] = float(val)
+				else:
+					# Single ticker case
+					if "Close" in df.columns and len(tickers) == 1:
+						series = df["Close"]
+						if series is not None and not series.empty and pd.notna(series.iloc[-1]):
+							prices[tickers[0]] = float(series.iloc[-1])
+		except Exception:
+			
+			pass
+
+		# Fallback for any missing tickers, fetch
+		missing = [t for t in tickers if t not in prices]
+		for t in missing:
+			try:
+				data = yf.Ticker(t).history(period="1d", auto_adjust=True)
+				if data is not None and not data.empty:
+					close = data["Close"].iloc[-1]
+					if pd.notna(close):
+						prices[t] = float(close)
+			except Exception:
+				
+				pass
+		return prices
+
+
 # Config the app
 st.set_page_config(page_title="TrackMyFinance", page_icon="💸", layout="wide")
 
@@ -438,20 +499,13 @@ def main():
 			# Ensure shares
 			inv_rows = pdf.dropna(subset=["ticker"]).copy()
 
-			# Fetch 
+			# Fetch batched latest prices
 			prices = {}
 			if yf is not None:
 				try:
 					unique_tickers = sorted([t for t in inv_rows["ticker"].dropna().unique()])
 					if unique_tickers:
-						# use yfinance tickers
-						for tck in unique_tickers: 
-							try:
-								data_cur = yf.Ticker(tck).history(period="1d", auto_adjust=True)
-								if data_cur is not None and not data_cur.empty:
-									prices[tck] = float(data_cur["Close"].iloc[-1])
-							except Exception:
-								pass
+						prices = fetch_latest_close_prices(unique_tickers)
 				except Exception:
 					st.warning("Failed fetching live prices for some tickers.")
 			else:

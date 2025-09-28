@@ -65,6 +65,7 @@ def init_db():
             )
             """
         )
+        
         # Ensure columns
         cols = {row[1] for row in conn.execute("PRAGMA table_info(transactions)").fetchall()}
         if "repeating" not in cols:
