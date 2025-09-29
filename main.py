@@ -513,26 +513,31 @@ def main():
 
 			portfolio_rows = []
 			for tck, group in inv_rows.groupby("ticker"):
-				total_invested = float(group["amount"].sum())
+				invested_cash = float(group["amount"].sum())
+				# shares * purchase_price
+				cb_series = (group["shares"] * group["purchase_price"]).dropna()
+				cost_basis = float(cb_series.sum()) if not cb_series.empty else None
 				
 				shares_vals = group["shares"].dropna()
 				shares_sum = float(shares_vals.sum()) if not shares_vals.empty else None
 				current_price = prices.get(tck)
 				current_value = None
-				profit = None
-				pct = None
+				profit_cb = None
+				pct_cb = None
 				if current_price and shares_sum:
 					current_value = shares_sum * current_price
-					profit = current_value - total_invested
-					pct = (profit / total_invested * 100.0) if total_invested else None
+					if cost_basis is not None and cost_basis != 0:
+						profit_cb = current_value - cost_basis
+						pct_cb = (profit_cb / cost_basis * 100.0)
 				portfolio_rows.append({
 					"Ticker": tck,
-					"Invested": total_invested,
+					"Invested": invested_cash,
+					"Cost Basis": cost_basis,
 					"Shares": shares_sum,
 					"Current Price": current_price,
 					"Current Value": current_value,
-					"Profit": profit,
-					"Profit %": pct,
+					"Profit": profit_cb,
+					"Profit %": pct_cb,
 				})
 
 			if not portfolio_rows:
@@ -542,23 +547,25 @@ def main():
 
 				# Totals
 				total_invested_all = port_df["Invested"].sum()
+				cost_basis_all = port_df["Cost Basis"].sum(min_count=1)
 				current_value_all = port_df["Current Value"].sum(min_count=1)
-				profit_all = None
-				return_pct_all = None
+				profit_cb_all = None
+				return_pct_cb_all = None
+				if pd.notna(current_value_all) and pd.notna(cost_basis_all):
+					profit_cb_all = current_value_all - cost_basis_all
+					return_pct_cb_all = (profit_cb_all / cost_basis_all * 100.0) if cost_basis_all else None
+				mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+				mc1.metric("Invested (cash)", fmt_currency(total_invested_all))
+				if pd.notna(cost_basis_all):
+					mc2.metric("Cost basis", fmt_currency(cost_basis_all))
 				if pd.notna(current_value_all):
-					profit_all = current_value_all - total_invested_all
+					mc3.metric("Current value", fmt_currency(current_value_all))
+				if profit_cb_all is not None:
+					mc4.metric("Profit (CB)", fmt_currency(profit_cb_all))
+				if return_pct_cb_all is not None:
+					mc5.metric("Profit % (CB)", f"{return_pct_cb_all:+.2f}%")
 
-					return_pct_all = (profit_all / total_invested_all * 100.0) if total_invested_all else None
-				mc1, mc2, mc3, mc4 = st.columns(4)
-				mc1.metric("Invested", fmt_currency(total_invested_all))
-				if current_value_all and pd.notna(current_value_all):
-					mc2.metric("Current value", fmt_currency(current_value_all))
-				if profit_all is not None:
-					mc3.metric("Profit", fmt_currency(profit_all) if profit_all is not None else "")
-				if return_pct_all is not None:
-					mc4.metric("Profit %", f"{return_pct_all:+.2f}%" if return_pct_all is not None else "")
-
-				show_cols = ["Ticker", "Invested", "Shares", "Current Price", "Current Value", "Profit", "Profit %"]
+				show_cols = ["Ticker", "Invested", "Cost Basis", "Shares", "Current Price", "Current Value", "Profit", "Profit %"]
 				st.dataframe(port_df[show_cols], hide_index=True)
 				csv_port = port_df.to_csv(index=False).encode("utf-8")
 				st.download_button("Download portfolio CSV", data=csv_port, file_name="portfolio.csv", mime="text/csv")
