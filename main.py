@@ -492,6 +492,18 @@ def main():
 
 		# Portfolio summary 
 		st.subheader("Portfolio summary")
+
+		# cache to refresh prices
+		if yf is not None:
+			cols_btn = st.columns([1, 6])
+			with cols_btn[0]:
+				if st.button("Refresh prices", help="Clear cached prices and re-fetch"):
+					try:
+						fetch_latest_close_prices.clear()
+						st.toast("Prices cache cleared; reloading...")
+						st.rerun()
+					except Exception:
+						pass
 		pdf = load_transactions(categories=["Investments"])
 		if pdf is None or pdf.empty or "ticker" not in pdf.columns:
 			st.info("No investment data yet.")
