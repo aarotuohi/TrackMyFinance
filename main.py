@@ -23,6 +23,8 @@ from functions import (
     get_currency_symbol,
     fmt_currency,
 	CATEGORIES,
+    upsert_budget,
+    get_budgets,
 )
 try:
 	import yfinance as yf
@@ -338,6 +340,44 @@ def main():
 		st.sidebar.error("Monthly limit exceeded")
 	else:
 		st.sidebar.caption("Tracking monthly spend vs limit")
+
+	st.sidebar.markdown("---")
+
+	# Budgets per category
+	st.sidebar.header("Budgets")
+	# Load existing budgets
+	budgets_df = get_budgets()
+	# Editor: select a category and set amount
+	colb1, colb2 = st.sidebar.columns([2, 1])
+	with colb1:
+		b_cat = st.selectbox("Category", options=CATEGORIES, key="budget_cat")
+	with colb2:
+		b_amount = st.number_input("Amount", min_value=0.0, step=10.0, key="budget_amt")
+	if st.sidebar.button("Save budget"):
+		upsert_budget(b_cat, b_amount)
+		st.sidebar.success("Budget saved")
+		st.rerun()
+
+	# Compute usage for current period + filters
+	# Use same date window and category filter
+	period_df = load_transactions(start_date=start_date, end_date=end_date, categories=category_filter)
+	by_cat = period_df.groupby("category", as_index=False)["amount"].sum() if not period_df.empty else pd.DataFrame(columns=["category", "amount"])
+
+	# Map budgets
+	if not budgets_df.empty:
+		for _, row in budgets_df.iterrows():
+			cat = row["category"]
+			limit_val = float(row["amount"])
+			spent = float(by_cat.loc[by_cat["category"] == cat, "amount"].sum()) if not by_cat.empty else 0.0
+			if limit_val <= 0:
+				continue
+			frac = max(0.0, min(spent / limit_val, 1.0))
+			st.sidebar.progress(frac, text=f"{cat}: {fmt_currency(spent)} / {fmt_currency(limit_val)}")
+			# Alerts
+			if spent >= limit_val:
+				st.sidebar.error(f"{cat} budget exceeded")
+			elif spent >= 0.8 * limit_val:
+				st.sidebar.warning(f"{cat} budget nearing limit (≥80%)")
 
 	st.sidebar.markdown("---")
 

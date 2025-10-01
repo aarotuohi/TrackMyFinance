@@ -100,6 +100,19 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_repeating ON transactions(repeating)")
 
+        # Budgets table for per-category budgets
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS budgets (
+                category TEXT PRIMARY KEY,
+                amount REAL NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_budgets_category ON budgets(category)")
+
 # insert transaction
 def insert_transaction(t_date: date, description: str, category: str, amount: float, repeating: bool = False, ticker: Optional[str] = None):
     
@@ -137,7 +150,22 @@ def delete_transaction(tx_id: int):
         conn.execute("DELETE FROM transactions WHERE id = ?", (int(tx_id),))
 
 
-def load_transactions(start: Optional[date] = None, end: Optional[date] = None, categories: Optional[List[str]] = None, repeating_only: Optional[bool] = None) -> pd.DataFrame:
+def load_transactions(
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+    categories: Optional[List[str]] = None,
+    repeating_only: Optional[bool] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+) -> pd.DataFrame:
+    """Load transactions with optional filters.
+    Accepts start/end or aliases start_date/end_date for convenience.
+    """
+    # Backward-compatible kwargs
+    if start is None and start_date is not None:
+        start = start_date
+    if end is None and end_date is not None:
+        end = end_date
     # Build query
     query = "SELECT id, t_date, description, category, amount, repeating, ticker, purchase_price, shares FROM transactions WHERE 1=1"
     params: list = []
@@ -167,6 +195,36 @@ def load_transactions(start: Optional[date] = None, end: Optional[date] = None, 
         
         if "repeating" in df.columns:
             df["repeating"] = df["repeating"].astype(int).astype(bool)
+    return df
+
+
+# Budgets helpers
+def upsert_budget(category: str, amount: float) -> None:
+    """Create or update a budget for a category."""
+    category = (category or "").strip()
+    if not category:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO budgets (category, amount)
+            VALUES (?, ?)
+            ON CONFLICT(category) DO UPDATE SET amount = excluded.amount, updated_at = datetime('now')
+            """,
+            (category, float(amount)),
+        )
+
+
+def delete_budget(category: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM budgets WHERE category = ?", ((category or "").strip(),))
+
+
+def get_budgets() -> pd.DataFrame:
+    with get_conn() as conn:
+        df = pd.read_sql_query("SELECT category, amount FROM budgets", conn)
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["category", "amount"], data=[])
     return df
 
 # default period
