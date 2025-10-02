@@ -7,6 +7,10 @@ import pandas as pd
 import plotly.express as px
 import plotly.io as pio
 import streamlit as st
+try:
+    from streamlit_plotly_events import plotly_events  # for click events on Plotly charts
+except Exception:
+    plotly_events = None
 
 try:
     import yfinance as yf  
@@ -266,7 +270,7 @@ def ensure_category(cat: str, other_text: Optional[str]) -> str:
     return cat
 
 
-def render_summary(df: pd.DataFrame, start: date, end: date):
+def render_summary(df: pd.DataFrame, start: date, end: date, drill_key: str = "drill_home"):
     
     if df.empty:
         st.info("No transactions in the selected period.")
@@ -289,15 +293,29 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
         by_cat = df.groupby("category", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
         fig_pie = px.pie(by_cat, names="category", values="amount", title="By category")
         fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-        st.plotly_chart(fig_pie)
+        if plotly_events is not None:
+            ev = plotly_events(fig_pie, click_event=True, hover_event=False, select_event=False, key=f"pie_{drill_key}")
+            if ev:
+                # For Pie, label holds the category
+                cat = ev[0].get("label") or ev[0].get("x")
+                if isinstance(cat, str) and cat:
+                    st.session_state[drill_key] = cat
+        else:
+            st.plotly_chart(fig_pie)
 
     with right:
         by_day = df.groupby("t_date", as_index=False)["amount"].sum()
         fig_day = px.bar(by_day, x="t_date", y="amount", title="By day")
         st.plotly_chart(fig_day)
 
+    # Current drill-down selection
+    active_cat = st.session_state.get(drill_key)
+    if active_cat:
+        st.caption(f"Table filtered by category: {active_cat}")
     with st.expander("See table and export"):
         show = df.copy()
+        if active_cat and "category" in show.columns:
+            show = show[show["category"] == active_cat]
         show.rename(
             columns={
                 "t_date": "Date",
@@ -328,6 +346,10 @@ def render_summary(df: pd.DataFrame, start: date, end: date):
             if c in show.columns
         ]
         st.dataframe(show[cols], hide_index=True)
+        if active_cat:
+            if st.button("Clear category filter", key=f"clear_{drill_key}"):
+                st.session_state.pop(drill_key, None)
+                st.rerun()
 
         csv = show.to_csv(index=False).encode("utf-8")
         st.download_button("Download CSV", data=csv, file_name="transactions.csv", mime="text/csv")
@@ -350,7 +372,7 @@ def render_delete(df: pd.DataFrame):
                 st.rerun()
 
 # render multiple days
-def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
+def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date], drill_key: str = "drill_multi"):
     
     if not selected_dates:
         st.info("Select one or more dates to see stats.")
@@ -376,15 +398,27 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
         by_cat = df.groupby("category", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
         fig_pie = px.pie(by_cat, names="category", values="amount", title="By category")
         fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-        st.plotly_chart(fig_pie)
+        if plotly_events is not None:
+            ev = plotly_events(fig_pie, click_event=True, hover_event=False, select_event=False, key=f"pie_{drill_key}")
+            if ev:
+                cat = ev[0].get("label") or ev[0].get("x")
+                if isinstance(cat, str) and cat:
+                    st.session_state[drill_key] = cat
+        else:
+            st.plotly_chart(fig_pie)
 
     with right:
         by_day = df.groupby("t_date", as_index=False)["amount"].sum()
         fig_day = px.bar(by_day, x="t_date", y="amount", title="By day")
         st.plotly_chart(fig_day)
 
+    active_cat = st.session_state.get(drill_key)
+    if active_cat:
+        st.caption(f"Table filtered by category: {active_cat}")
     with st.expander("See table and export"):
         show = df.copy()
+        if active_cat and "category" in show.columns:
+            show = show[show["category"] == active_cat]
         show.rename(
             columns={
                 "t_date": "Date",
@@ -416,6 +450,10 @@ def render_summary_for_dates(df: pd.DataFrame, selected_dates: List[date]):
         ]
 
         st.dataframe(show[cols], hide_index=True)
+        if active_cat:
+            if st.button("Clear category filter", key=f"clear_{drill_key}"):
+                st.session_state.pop(drill_key, None)
+                st.rerun()
         csv = show.to_csv(index=False).encode("utf-8")
         st.download_button(
             "Download CSV",
